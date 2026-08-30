@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 // HUD/dock layout verification: the left dock must never overlap the player
 // frame (team avatars), and the exp bar must never exceed the panel width.
 // Usage: node hudcheck.mjs
@@ -9,7 +10,8 @@ const USER = process.env.PSYRENA_USER ?? "frank";
 const PW = process.env.PSYRENA_PW ?? "psyrena123";
 
 const BASE = process.env.PSYRENA_URL ?? "http://localhost:5199/";
-const OUT = process.env.OUT_DIR ?? "/home/frank/.claude/jobs/7081f158/tmp";
+const OUT = process.env.OUT_DIR ?? "/tmp/psyrena-hudcheck";
+mkdirSync(OUT, { recursive: true });
 
 function launch() {
   return puppeteer.launch({

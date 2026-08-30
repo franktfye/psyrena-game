@@ -9,7 +9,7 @@ moderation, reports, statistics) is a different thing: it is served by the game
 server at **`/admin`** (`server/admin.mjs` + `server/adminConsole.html`) and
 gated on `users.is_admin`. The first account ever created is promoted to admin
 automatically; further admins are appointed in the console itself. Verify the
-whole surface with `node admincheck.mjs`.
+whole surface with `node tools/probe/admincheck.mjs`.
 
 ## boss-math/ — Boss Fight Design Sheet
 

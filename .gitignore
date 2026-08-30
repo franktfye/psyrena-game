@@ -40,3 +40,6 @@ sfx-choices.json
 # redistributing the audio, so only the manifest (src/state/sfx.ts) is
 # tracked. Regenerate with `node tools/sync-sfx.mjs` (reads psfx/sfx-choices.json).
 public/assets/sfx/
+
+# Python bytecode
+__pycache__/

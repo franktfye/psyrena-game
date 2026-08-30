@@ -54,9 +54,13 @@ clone.
 Two licenses cover this repository, and a contribution falls under whichever
 matches what you touched:
 
-- **Code** — [AGPL-3.0](LICENSE).
+- **Code** — [PolyForm Noncommercial 1.0.0](LICENSE). Use, modify and share for
+  any non-commercial purpose; classrooms and research institutions are covered.
 - **Assets** (anything under `public/assets/`) — [CC BY-NC 4.0](LICENSE-ASSETS.md),
   attribution required, non-commercial only.
+
+Neither license permits commercial use. The source is public so that students
+and other teachers can read, run and extend it, not so that it can be sold.
 
 By contributing you agree to license your contribution on those terms. If you
 submit an asset, say in the PR how it was made and under what plan or license,

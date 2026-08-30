@@ -15,7 +15,7 @@ Light logic mirrors src/scenes/villageHub.ts:
 - faint cyan + magenta smudges near the horizon (storefront holo glow)
 - near-black ground hemisphere with a warm bounce under the sunset side
 """
-import math, struct
+import math, struct, os
 
 W, H = 512, 256
 SUN_AZ = math.atan2(-0.55, 0.35)  # azimuth of the light SOURCE
@@ -70,7 +70,7 @@ for y in range(H):
     row = b"".join(rgbe(*pixel((x + 0.5) / W, v)) for x in range(W))
     rows.append(row)
 
-out = "/home/frank/psyrena/public/env/dusk.hdr"
+out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "public", "env", "dusk.hdr")
 with open(out, "wb") as f:
     f.write(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n")
     f.write(f"-Y {H} +X {W}\n".encode())

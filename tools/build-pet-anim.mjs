@@ -29,8 +29,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-/** Raw exports live outside the repo tree (gitignored); override for a worktree. */
-const SRC_ROOT = process.env.PET_SRC_ROOT ?? "/home/frank/Projects/psyrena/assets/work/village/tripo-out";
+/** Raw Tripo exports live under the gitignored assets/work/ tree; override with PET_SRC_ROOT. */
+const SRC_ROOT = process.env.PET_SRC_ROOT ?? `${ROOT}/assets/work/village/tripo-out`;
 const OUT = `${ROOT}/public/assets/village`;
 /** Intermediates land under the pipeline work tree, where `.gitignore` eats them. */
 const TMP = `${ROOT}/assets/work/village/pet-build`;

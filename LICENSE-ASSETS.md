@@ -1,7 +1,7 @@
 # Asset license
 
-The `LICENSE` file (AGPL-3.0) covers the **source code** in this repository.
-It does not cover the game's media. Those are licensed separately, on the terms
+The `LICENSE` file (PolyForm Noncommercial 1.0.0) covers the **source code** in
+this repository. It does not cover the game's media. Those are licensed separately, on the terms
 below.
 
 ## What this covers
@@ -23,8 +23,11 @@ this repository, and provided the use is **not commercial**. Selling the assets,
 shipping them inside a paid or ad-supported product, or otherwise using them
 primarily for commercial advantage requires separate written permission.
 
-Note the asymmetry, because it matters: the code is AGPL-3.0 and may be used
-commercially under that license's terms. The art, audio and models may not.
+Both licenses are non-commercial. They are separate because a software license
+and a media license answer different questions (patents and distribution of
+changes on one side, attribution and derivative works on the other), not
+because the code may be used in ways the art may not. Neither may be sold or
+shipped in a paid or ad-supported product.
 
 ## Third-party material and generation-tool terms
 

@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 // Verify: buff-row popup tooltips — hover on desktop, tap-toggle on touch.
 // Casts E in the village to raise a real self-buff tile, then drives the
 // pointer and asserts #buff-tooltip visibility + content at each step.
@@ -10,7 +11,8 @@ const USER = process.env.PSYRENA_USER ?? "frank";
 const PW = process.env.PSYRENA_PW ?? "psyrena123";
 
 const BASE = process.env.PSYRENA_URL ?? "http://localhost:5321/";
-const OUT = process.env.OUT_DIR ?? "/home/frank/.claude/jobs/95c5f69d/tmp";
+const OUT = process.env.OUT_DIR ?? "/tmp/psyrena-tipcheck";
+mkdirSync(OUT, { recursive: true });
 
 function launch() {
   return puppeteer.launch({

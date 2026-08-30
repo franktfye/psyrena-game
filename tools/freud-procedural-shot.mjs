@@ -1,4 +1,4 @@
-// Capture driver for public/freud-procedural.html — same launch flags as camshot.mjs.
+// Capture driver for public/freud-procedural.html — same launch flags as tools/probe/camshot.mjs.
 // Usage: node /tmp/freud-shot.mjs <out.png> [query] [waitMs] [click]
 //   query  e.g. "anim=walk&phase=0.25"
 //   click  optional element id to click before shooting (e.g. "a-stop", "glb")

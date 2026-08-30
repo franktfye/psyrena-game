@@ -21,7 +21,7 @@ const browser = await puppeteer.launch({
 });
 const page = await browser.newPage();
 page.on("pageerror", (e) => console.log("[pageerror]", e.message));
-await page.goto(`${URL}/petprobe.html`, { waitUntil: "domcontentloaded", timeout: 60000 });
+await page.goto(`${URL}/tools/probe/petprobe.html`, { waitUntil: "domcontentloaded", timeout: 60000 });
 await page.waitForFunction(() => window.probeReady === true, { timeout: 60000 });
 
 const out = await page.evaluate(async (file) => {

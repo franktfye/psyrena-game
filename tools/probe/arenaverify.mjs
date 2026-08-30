@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 // Post-fix verification: spawn-pad start, follow camera, walk-in, fog.
 import puppeteer from "puppeteer-core";
 
@@ -7,7 +8,8 @@ const USER = process.env.PSYRENA_USER ?? "frank";
 const PW = process.env.PSYRENA_PW ?? "psyrena123";
 
 const URL = process.env.PSYRENA_URL ?? "http://127.0.0.1:5174/";
-const T = "/home/frank/.claude/jobs/d9784bd8/tmp";
+const T = process.env.OUT_DIR ?? "/tmp/psyrena-arenaverify";
+mkdirSync(T, { recursive: true });
 const browser = await puppeteer.launch({
   executablePath: "/usr/bin/chromium",
   headless: "new",

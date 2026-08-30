@@ -40,7 +40,7 @@ await page.setViewport({ width: 900, height: 900 });
 const logs = [];
 page.on("console", (m) => logs.push(`[${m.type()}] ${m.text()}`));
 page.on("pageerror", (e) => logs.push(`[pageerror] ${e.message}`));
-await page.goto(`${URL}/petprobe.html`, { waitUntil: "domcontentloaded", timeout: 60000 });
+await page.goto(`${URL}/tools/probe/petprobe.html`, { waitUntil: "domcontentloaded", timeout: 60000 });
 await page.waitForFunction(() => window.probeReady === true, { timeout: 60000 });
 
 for (const [file, yaw, label] of MODELS) {

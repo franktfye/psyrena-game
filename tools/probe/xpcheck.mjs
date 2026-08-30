@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 // End-to-end progression check: post one fight result, confirm the server
 // awards XP and that a fresh load renders the new level + a filled exp bar.
 import puppeteer from "puppeteer-core";
@@ -8,7 +9,8 @@ const USER = process.env.PSYRENA_USER ?? "frank";
 const PW = process.env.PSYRENA_PW ?? "psyrena123";
 
 const BASE = process.env.PSYRENA_URL ?? "http://localhost:5199/";
-const OUT = "/home/frank/.claude/jobs/7081f158/tmp";
+const OUT = process.env.OUT_DIR ?? "/tmp/psyrena-xpcheck";
+mkdirSync(OUT, { recursive: true });
 
 const browser = await puppeteer.launch({
   executablePath: "/usr/bin/chromium",

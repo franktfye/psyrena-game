@@ -2,6 +2,7 @@
   "name": "psyrena",
   "version": "0.1.0",
   "private": true,
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "description": "Psyrena — 3D co-op boss-fighting RPG. Babylon.js client.",
   "scripts": {
