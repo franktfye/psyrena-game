@@ -1,0 +1,143 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>pet facing probe</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #223;
+      }
+      canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <script type="module">
+      // Bare-scene probe: load one pet glb, apply the follower's yaw, play one
+      // clip, and compare the model's nose against a red arrow that marks the
+      // facing the follower THINKS it set. Driven by petprobe.mjs via
+      // window.probeLoad / window.probeClip.
+      import { Engine } from "@babylonjs/core/Engines/engine";
+      import { Scene } from "@babylonjs/core/scene";
+      import { ArcRotateCamera } from "@babylonjs/core/Cameras/arcRotateCamera";
+      import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
+      import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight";
+      import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+      import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
+      import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
+      import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
+      import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
+      import { ImportMeshAsync } from "@babylonjs/core/Loading/sceneLoader";
+      import { KhronosTextureContainer2 } from "@babylonjs/core/Misc/khronosTextureContainer2";
+      import "@babylonjs/core/Materials/Textures/Loaders/ktxTextureLoader";
+      import "@babylonjs/loaders/glTF/2.0";
+
+      KhronosTextureContainer2.URLConfig = {
+        jsDecoderModule: "/ktx2/babylon.ktx2Decoder.js",
+        wasmUASTCToASTC: "/ktx2/uastc_astc.wasm",
+        wasmUASTCToBC7: "/ktx2/uastc_bc7.wasm",
+        wasmUASTCToRGBA_UNORM: "/ktx2/uastc_rgba8_unorm_v2.wasm",
+        wasmUASTCToRGBA_SRGB: "/ktx2/uastc_rgba8_srgb_v2.wasm",
+        wasmUASTCToR8_UNORM: "/ktx2/uastc_r8_unorm.wasm",
+        wasmUASTCToRG8_UNORM: "/ktx2/uastc_rg8_unorm.wasm",
+        jsMSCTranscoder: "/ktx2/msc_basis_transcoder.js",
+        wasmMSCTranscoder: "/ktx2/msc_basis_transcoder.wasm",
+        wasmZSTDDecoder: "/ktx2/zstddec.wasm",
+      };
+
+      const engine = new Engine(document.getElementById("c"), true);
+      const scene = new Scene(engine);
+      scene.clearColor = new Color4(0.13, 0.13, 0.2, 1);
+      new HemisphericLight("h", new Vector3(0, 1, 0), scene).intensity = 0.9;
+      const dir = new DirectionalLight("d", new Vector3(-0.3, -1, -0.4), scene);
+      dir.intensity = 0.8;
+
+      const cam = new ArcRotateCamera("cam", -Math.PI / 2, 0.01, 2.6, new Vector3(0, 0, 0), scene);
+      cam.minZ = 0.01;
+      window.probeCam = (mode) => {
+        // top = straight down (+Z toward screen TOP is NOT guaranteed — the
+        // red arrow is the reference, never the screen axes). side = low chase.
+        if (mode === "side") {
+          cam.alpha = -Math.PI / 2;
+          cam.beta = 1.15;
+          cam.radius = 2.2;
+        } else {
+          cam.alpha = -Math.PI / 2;
+          cam.beta = 0.01;
+          cam.radius = 2.6;
+        }
+      };
+
+      const ground = MeshBuilder.CreateGround("g", { width: 6, height: 6 }, scene);
+      const gm = new StandardMaterial("gm", scene);
+      gm.diffuseColor = new Color3(0.25, 0.25, 0.3);
+      gm.specularColor = Color3.Black();
+      ground.material = gm;
+
+      // Red arrow: the facing the follower intends (-Z once root yaw applied,
+      // i.e. we PARENT it outside the root and point it at world -Z). Shaft
+      // plus a wider head at the -Z end so direction is unambiguous top-down.
+      const mkArrow = (name, color, dirV) => {
+        const mat = new StandardMaterial(name + "m", scene);
+        mat.diffuseColor = color;
+        mat.emissiveColor = color.scale(0.6);
+        const shaft = MeshBuilder.CreateBox(name, { width: 0.05, height: 0.02, depth: 1.0 }, scene);
+        shaft.position = dirV.scale(0.5).add(new Vector3(0, 0.011, 0));
+        shaft.rotation.y = Math.atan2(dirV.x, dirV.z);
+        shaft.material = mat;
+        const head = MeshBuilder.CreateBox(name + "h", { width: 0.16, height: 0.02, depth: 0.12 }, scene);
+        head.position = dirV.scale(1.05).add(new Vector3(0, 0.011, 0));
+        head.rotation.y = shaft.rotation.y;
+        head.material = mat;
+      };
+      mkArrow("expect", new Color3(1, 0.15, 0.15), new Vector3(0, 0, -1)); // expected facing
+      mkArrow("xaxis", new Color3(0.15, 1, 0.3), new Vector3(1, 0, 0)); // world +X
+
+      let root = null;
+      let groups = [];
+
+      /** Load a pet glb under a fresh root with the follower's yaw applied. */
+      window.probeLoad = async (file, yaw) => {
+        if (root) {
+          root.dispose(false, true);
+          root = null;
+        }
+        root = new TransformNode("probe_root", scene);
+        // Simulate the follower travelling toward -Z: tick sets
+        // root.rotation.y = atan2(0,-1)+PI+modelYaw = 2*PI+modelYaw ≡ modelYaw.
+        root.rotation.y = yaw;
+        const res = await ImportMeshAsync(`/assets/village/${file}`, scene);
+        const loaded = res.meshes[0];
+        loaded.parent = root;
+        const b = loaded.getHierarchyBoundingVectors();
+        const scale = 0.55 / Math.max(1e-3, b.max.y - b.min.y);
+        loaded.scaling.scaleInPlace(scale);
+        groups = res.animationGroups;
+        for (const g of groups) g.stop();
+        res.skeletons[0]?.returnToRest();
+        return groups.map((g) => g.name);
+      };
+
+      /** Play one clip looped (or rest pose for null). */
+      window.probeClip = (name) => {
+        for (const g of groups) g.stop();
+        if (!name) return true;
+        const g = groups.find((x) => x.name === name);
+        if (!g) return false;
+        g.start(true);
+        return true;
+      };
+
+      engine.runRenderLoop(() => scene.render());
+      window.probeSceneRef = () => scene;
+      window.probeReady = true;
+    </script>
+  </body>
+</html>

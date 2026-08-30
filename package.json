@@ -1,0 +1,32 @@
+{
+  "name": "psyrena",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Psyrena — 3D co-op boss-fighting RPG. Babylon.js client.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host",
+    "server": "node server/index.mjs",
+    "typecheck": "tsc --noEmit",
+    "verify:budget": "node --experimental-strip-types tools/verify-hero-budget.mjs",
+    "assets:ktx2": "node tools/vendor-ktx2.mjs",
+    "assets:meshopt": "node tools/meshopt-assets.mjs"
+  },
+  "dependencies": {
+    "@babylonjs/core": "^8.0.0",
+    "@babylonjs/gui": "^8.0.0",
+    "@babylonjs/loaders": "^8.0.0",
+    "@babylonjs/materials": "^8.0.0"
+  },
+  "devDependencies": {
+    "@babylonjs/inspector": "^8.56.2",
+    "@types/node": "^26.1.2",
+    "@types/three": "^0.169.0",
+    "puppeteer-core": "^25.4.0",
+    "three": "^0.169.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0"
+  }
+}

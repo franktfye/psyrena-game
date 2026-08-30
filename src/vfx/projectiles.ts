@@ -1,0 +1,496 @@
+import { Scene } from "@babylonjs/core/scene";
+import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Color3 } from "@babylonjs/core/Maths/math.color";
+import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
+import { Mesh } from "@babylonjs/core/Meshes/mesh";
+import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
+import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
+import { TrailMesh } from "@babylonjs/core/Meshes/trailMesh";
+
+import "@babylonjs/core/Meshes/Builders/sphereBuilder";
+import "@babylonjs/core/Meshes/Builders/planeBuilder";
+import "@babylonjs/core/Meshes/Builders/torusBuilder";
+import "@babylonjs/core/Meshes/Builders/cylinderBuilder";
+
+import { createSoftRingTexture } from "./softSprites";
+
+/**
+ * Cast projectiles — the travel layer between a cast and its target.
+ *
+ * Two fire modes:
+ *
+ *  - UNTARGETED (hub): no `target` in the spec — the projectile takes a random
+ *    heading inside a front cone off the hero's facing and fades at `lifeSec`.
+ *  - HOMING (arena): `target` set — the player never aims; the projectile
+ *    steers itself onto the target every frame and lands with an impact flash
+ *    plus the spec's `onHit` callback (the fight sim applies damage there, so
+ *    the HP bar moves exactly when the hit reads).
+ *
+ *  - Basic attack: small and fast — a blue bolt by default; Pavlov flies his
+ *    NS bell and Freud a smoke ring instead (see `dressing`).
+ *  - Palette 1-5: a larger, slower orb tinted per psychosexual stage, with a
+ *    gentle wobble and a colour-matched trail.
+ *  - E / R / F are self effects and launch nothing.
+ *
+ * A fixed pool of orbs + trails is created once and re-armed per cast; one
+ * onBeforeRenderObservable moves the live ones, so an idle hero costs nothing.
+ * A second tiny pool of billboard ring sprites plays the impact flashes.
+ */
+
+export interface ProjectileSpec {
+  /** Emissive colour of orb and trail. */
+  color: Color3;
+  /** Orb diameter in metres. */
+  size: number;
+  /** Flight speed in m/s. */
+  speed: number;
+  /** Seconds before the projectile fades out (caps a homing flight too). */
+  lifeSec: number;
+  /** Sideways wobble amplitude in metres (0 = dead straight). */
+  wobble?: number;
+  /** Random yaw spread (radians, ±) around the hero's facing. Untargeted only. */
+  spread?: number;
+  /**
+   * Homing destination — a fixed point or a live accessor for a moving boss.
+   * When set, `spread` is ignored: casts auto-aim, the player never does.
+   */
+  target?: Vector3 | (() => Vector3);
+  /** Distance at which the projectile counts as landed (default 1.2 m). */
+  hitRadius?: number;
+  /** Fired once on landing, with the impact point. No hit, no call. */
+  onHit?: (pos: Vector3) => void;
+  /**
+   * Fly a procedural prop instead of the emissive orb. The orb still carries
+   * the flight (and the trail); the prop rides it.
+   *
+   *  - "steak": Pavlov's UCS — the food itself, tumbling end over end.
+   *  - "bell":  Pavlov's basic attack — the little NS bell, spinning as it
+   *             flies, the same spin language as the CS ring fan.
+   *  - "smoke": Freud's basic attack — a grey smoke ring blown at the target,
+   *             expanding and thinning like cigar smoke as it drifts.
+   */
+  dressing?: DressingKind;
+}
+
+export type DressingKind = "steak" | "bell" | "smoke";
+
+export interface CastProjectiles {
+  fire(spec: ProjectileSpec): void;
+}
+
+const POOL = 12;
+const IMPACT_POOL = 8;
+/** Seconds an impact flash lives: fast swell, fast fade. */
+const IMPACT_LIFE = 0.32;
+
+interface Pooled {
+  orb: Mesh;
+  mat: StandardMaterial;
+  trail: TrailMesh;
+  trailMat: StandardMaterial;
+  dir: Vector3;
+  side: Vector3;
+  origin: Vector3;
+  speed: number;
+  life: number;
+  age: number;
+  wobble: number;
+  active: boolean;
+  target: Vector3 | (() => Vector3) | null;
+  hitRadius: number;
+  onHit: ((pos: Vector3) => void) | null;
+  /** Dressing rigs, built lazily the first time this slot flies each kind. */
+  rigs: Partial<Record<DressingKind, DressingRig>>;
+  dressing: DressingKind | null;
+  /** Trail alpha at full strength — dressings tone it down (smoke barely trails). */
+  trailBase: number;
+}
+
+interface DressingRig {
+  root: TransformNode;
+  spin: TransformNode;
+  mats: StandardMaterial[];
+}
+
+interface PooledImpact {
+  quad: Mesh;
+  mat: StandardMaterial;
+  age: number;
+  active: boolean;
+}
+
+export function createCastProjectiles(scene: Scene, hero: TransformNode): CastProjectiles {
+  const pool: Pooled[] = [];
+  for (let i = 0; i < POOL; i++) {
+    // `freud` in the name lands on the hub's shadow-caster denylist, like the
+    // rest of the cast VFX.
+    const orb = MeshBuilder.CreateSphere(`freudProj_orb_${i}`, { diameter: 1, segments: 8 }, scene);
+    orb.isPickable = false;
+    const mat = new StandardMaterial(`freudProj_orbMat_${i}`, scene);
+    mat.disableLighting = true;
+    mat.diffuseColor = Color3.Black();
+    mat.specularColor = Color3.Black();
+    mat.disableDepthWrite = true;
+    orb.material = mat;
+
+    const trail = new TrailMesh(
+      `freudProj_trail_${i}`,
+      orb,
+      scene,
+      { diameter: 0.1, length: 10, segments: 10, doNotTaper: false, autoStart: false }
+    );
+    trail.isPickable = false;
+    const trailMat = new StandardMaterial(`freudProj_trailMat_${i}`, scene);
+    trailMat.disableLighting = true;
+    trailMat.diffuseColor = Color3.Black();
+    trailMat.specularColor = Color3.Black();
+    trailMat.disableDepthWrite = true;
+    trail.material = trailMat;
+
+    orb.setEnabled(false);
+    trail.setEnabled(false);
+    pool.push({
+      orb,
+      mat,
+      trail,
+      trailMat,
+      dir: Vector3.Zero(),
+      side: Vector3.Zero(),
+      origin: Vector3.Zero(),
+      speed: 0,
+      life: 0,
+      age: 0,
+      wobble: 0,
+      active: false,
+      target: null,
+      hitRadius: 1.2,
+      onHit: null,
+      rigs: {},
+      dressing: null,
+      trailBase: 0.55,
+    });
+  }
+
+  // Dressing props: primitives only, same unlit-emissive recipe as everything
+  // else in vfx/. Built in orb-local units (the orb is scaled to spec.size)
+  // and parented to the orb: the flight/trail/impact machinery never notices.
+  const dressMat = (name: string, tint: Color3): StandardMaterial => {
+    const m = new StandardMaterial(name, scene);
+    m.disableLighting = true;
+    m.emissiveColor = tint;
+    m.diffuseColor = Color3.Black();
+    m.specularColor = Color3.Black();
+    return m;
+  };
+  const finishRig = (
+    p: Pooled,
+    root: TransformNode,
+    spin: TransformNode,
+    meshes: Mesh[],
+    mats: StandardMaterial[]
+  ): DressingRig => {
+    root.parent = p.orb;
+    for (const mesh of meshes) {
+      mesh.parent = spin;
+      mesh.isPickable = false;
+      mesh.applyFog = false;
+      (mesh.material as StandardMaterial).forceCompilation(mesh);
+    }
+    return { root, spin, mats };
+  };
+
+  // The UCS beef steak: meat slab with a fat cap, boneless (the bone read as
+  // a dog toy, not dinner). Oversized, but only mildly — at 1.1 the cut still
+  // carries past the arena camera without dwarfing the hero.
+  const buildSteak = (p: Pooled, i: number): DressingRig => {
+    const root = new TransformNode(`freudProj_steakRoot_${i}`, scene);
+    const spin = new TransformNode(`freudProj_steakSpin_${i}`, scene);
+    spin.parent = root;
+    spin.scaling.setAll(1.1);
+
+    // Kept well under 1.0 — the arena's bloom blows brighter emissives out
+    // into a white blob and the cut reads as a light, not a steak.
+    const meatMat = dressMat(`freudProj_steakMeat_${i}`, new Color3(0.42, 0.09, 0.06));
+    const fatMat = dressMat(`freudProj_steakFat_${i}`, new Color3(0.46, 0.36, 0.22));
+
+    const meat = MeshBuilder.CreateSphere(`freudProj_steakMeatM_${i}`, { diameter: 1, segments: 12 }, scene);
+    meat.scaling.set(1.5, 0.45, 2.2); // oval slab, long side down the flight path
+    meat.material = meatMat;
+    // Fat cap hugging the slab's equator.
+    const fat = MeshBuilder.CreateTorus(
+      `freudProj_steakFatM_${i}`,
+      { diameter: 1.28, thickness: 0.34, tessellation: 24 },
+      scene
+    );
+    fat.scaling.set(1.18, 0.55, 1.72);
+    fat.material = fatMat;
+
+    return finishRig(p, root, spin, [meat, fat], [meatMat, fatMat]);
+  };
+
+  // The NS bell: crown knob, domed shoulder, flared skirt, mouth rim and a
+  // clapper peeking out below. Hangs upright and spins on its own axis in the
+  // driver — the same spin the CS ring fan sweeps.
+  const buildBell = (p: Pooled, i: number): DressingRig => {
+    const root = new TransformNode(`freudProj_bellRoot_${i}`, scene);
+    const spin = new TransformNode(`freudProj_bellSpin_${i}`, scene);
+    spin.parent = root;
+    spin.scaling.setAll(2.0);
+    // A touch of lean so the silhouette never degenerates to pure profile.
+    root.rotation.z = 0.22;
+
+    // Brass under bloom: brighter than the steak but still shy of 1.0.
+    const brassMat = dressMat(`freudProj_bellBrass_${i}`, new Color3(0.92, 0.74, 0.2));
+    const rimMat = dressMat(`freudProj_bellRim_${i}`, new Color3(0.68, 0.5, 0.12));
+    const clapperMat = dressMat(`freudProj_bellClapper_${i}`, new Color3(0.45, 0.38, 0.28));
+
+    const skirt = MeshBuilder.CreateCylinder(
+      `freudProj_bellSkirtM_${i}`,
+      { height: 0.9, diameterTop: 0.42, diameterBottom: 1.0, tessellation: 20 },
+      scene
+    );
+    skirt.position.y = 0.05;
+    skirt.material = brassMat;
+    const dome = MeshBuilder.CreateSphere(`freudProj_bellDomeM_${i}`, { diameter: 0.46, segments: 10 }, scene);
+    dome.scaling.set(1, 0.7, 1);
+    dome.position.y = 0.52;
+    dome.material = brassMat;
+    const knob = MeshBuilder.CreateSphere(`freudProj_bellKnobM_${i}`, { diameter: 0.2, segments: 8 }, scene);
+    knob.position.y = 0.72;
+    knob.material = rimMat;
+    const rim = MeshBuilder.CreateTorus(
+      `freudProj_bellRimM_${i}`,
+      { diameter: 0.98, thickness: 0.13, tessellation: 20 },
+      scene
+    );
+    rim.position.y = -0.4;
+    rim.material = rimMat;
+    const clapper = MeshBuilder.CreateSphere(`freudProj_bellClapM_${i}`, { diameter: 0.28, segments: 8 }, scene);
+    clapper.position.y = -0.5;
+    clapper.material = clapperMat;
+
+    return finishRig(p, root, spin, [skirt, dome, knob, rim, clapper], [brassMat, rimMat, clapperMat]);
+  };
+
+  // The smoke ring: a fat grey torus facing down the flight path, with a
+  // thinner wisp trailing just behind. The driver grows and thins it over the
+  // flight — a ring blown from the lips, not a bolt.
+  const buildSmoke = (p: Pooled, i: number): DressingRig => {
+    const root = new TransformNode(`freudProj_smokeRoot_${i}`, scene);
+    const spin = new TransformNode(`freudProj_smokeSpin_${i}`, scene);
+    spin.parent = root;
+
+    // Grey, not glowing: low emissive keeps it under the bloom threshold so
+    // it reads as smoke among the emissive orbs.
+    const puffMat = dressMat(`freudProj_smokePuff_${i}`, new Color3(0.58, 0.6, 0.64));
+    const wispMat = dressMat(`freudProj_smokeWisp_${i}`, new Color3(0.42, 0.44, 0.48));
+
+    const ring = MeshBuilder.CreateTorus(
+      `freudProj_smokeRingM_${i}`,
+      { diameter: 1.5, thickness: 0.42, tessellation: 32 },
+      scene
+    );
+    ring.rotation.x = Math.PI / 2; // torus axis along +Z = the flight path
+    ring.material = puffMat;
+    const wisp = MeshBuilder.CreateTorus(
+      `freudProj_smokeWispM_${i}`,
+      { diameter: 1.0, thickness: 0.2, tessellation: 24 },
+      scene
+    );
+    wisp.rotation.x = Math.PI / 2;
+    wisp.position.z = -0.4; // lags behind the main ring
+    wisp.material = wispMat;
+
+    return finishRig(p, root, spin, [ring, wisp], [puffMat, wispMat]);
+  };
+
+  const RIG_BUILDERS: Record<DressingKind, (p: Pooled, i: number) => DressingRig> = {
+    steak: buildSteak,
+    bell: buildBell,
+    smoke: buildSmoke,
+  };
+
+  // Impact flashes: billboarded soft rings that swell and fade on the boss.
+  const impacts: PooledImpact[] = [];
+  const impactTex = createSoftRingTexture(scene, "freudProj_impactTex", 128, 0.18, 0.1, 0.28, 0.42);
+  for (let i = 0; i < IMPACT_POOL; i++) {
+    const quad = MeshBuilder.CreatePlane(`freudProj_impact_${i}`, { size: 1 }, scene);
+    quad.isPickable = false;
+    quad.billboardMode = Mesh.BILLBOARDMODE_ALL;
+    const mat = new StandardMaterial(`freudProj_impactMat_${i}`, scene);
+    mat.disableLighting = true;
+    mat.diffuseColor = Color3.Black();
+    mat.specularColor = Color3.Black();
+    mat.emissiveTexture = impactTex;
+    mat.opacityTexture = impactTex;
+    mat.disableDepthWrite = true;
+    quad.material = mat;
+    quad.setEnabled(false);
+    impacts.push({ quad, mat, age: 0, active: false });
+  }
+
+  const impact = (pos: Vector3, color: Color3, size: number): void => {
+    const f = impacts.find((q) => !q.active) ?? impacts[0]!;
+    f.quad.position.copyFrom(pos);
+    f.quad.scaling.setAll(size);
+    f.mat.emissiveColor = color.clone();
+    f.mat.alpha = 0.95;
+    f.age = 0;
+    f.quad.setEnabled(true);
+    f.active = true;
+  };
+
+  const fwd = Vector3.Zero();
+  const aim = Vector3.Zero();
+  const dressAim = Vector3.Zero();
+  scene.onBeforeRenderObservable.add(() => {
+    const dt = Math.min(scene.getEngine().getDeltaTime() / 1000, 0.1);
+    for (const p of pool) {
+      if (!p.active) continue;
+      p.age += dt;
+      const u = p.age / p.life;
+      if (u >= 1) {
+        p.active = false;
+        p.onHit = null;
+        p.trail.stop();
+        p.orb.setEnabled(false);
+        p.trail.setEnabled(false);
+        continue;
+      }
+      if (p.target) {
+        // Auto-aim: re-steer onto the (possibly moving) target every frame.
+        const dest = typeof p.target === "function" ? p.target() : p.target;
+        dest.subtractToRef(p.orb.position, aim);
+        const dist = aim.length();
+        if (dist <= p.hitRadius) {
+          impact(p.orb.position, p.mat.emissiveColor, Math.max(1.6, p.orb.scaling.x * 9));
+          p.onHit?.(p.orb.position.clone());
+          p.active = false;
+          p.onHit = null;
+          p.trail.stop();
+          p.orb.setEnabled(false);
+          p.trail.setEnabled(false);
+          continue;
+        }
+        aim.normalizeToRef(p.dir);
+        p.side.set(-p.dir.z, 0, p.dir.x);
+      }
+      p.orb.position.addInPlace(p.dir.scale(p.speed * dt));
+      if (p.wobble > 0) {
+        const sway = Math.sin(p.age * 9) * p.wobble * dt;
+        p.orb.position.addInPlace(p.side.scale(sway));
+      }
+      // Fade out over the last third of the flight.
+      const fade = u < 0.66 ? 1 : 1 - (u - 0.66) / 0.34;
+      p.mat.alpha = fade;
+      p.trailMat.alpha = p.trailBase * fade;
+      const rig = p.dressing ? p.rigs[p.dressing] : undefined;
+      if (rig) {
+        let dressFade = fade;
+        if (p.dressing === "steak") {
+          // Nose down the flight path (the orb itself never rotates, so
+          // parent space == world space here), tumbling end over end.
+          dressAim.copyFrom(p.dir);
+          rig.root.lookAt(dressAim);
+          rig.spin.rotation.x += dt * 8;
+        } else if (p.dressing === "bell") {
+          // Upright, spinning on its own axis — the CS fan's spin, handheld.
+          rig.spin.rotation.y += dt * 7;
+        } else {
+          // Smoke: ring plane square to the flight, swelling and thinning as
+          // it drifts — the far end of a blown ring's life.
+          dressAim.copyFrom(p.dir);
+          rig.root.lookAt(dressAim);
+          rig.spin.scaling.setAll(3.0 * (1 + u * 0.9));
+          dressFade = fade * 0.75 * (1 - 0.45 * u);
+        }
+        for (const m of rig.mats) m.alpha = dressFade;
+      }
+    }
+    for (const f of impacts) {
+      if (!f.active) continue;
+      f.age += dt;
+      const u = f.age / IMPACT_LIFE;
+      if (u >= 1) {
+        f.active = false;
+        f.quad.setEnabled(false);
+        continue;
+      }
+      const s = f.quad.scaling.x;
+      f.quad.scaling.setAll(s + s * 5 * dt);
+      f.mat.alpha = 0.95 * (1 - u);
+    }
+  });
+
+  return {
+    fire(spec) {
+      const p = pool.find((q) => !q.active) ?? pool[0]!;
+      p.dressing = spec.dressing ?? null;
+      if (p.dressing && !p.rigs[p.dressing]) {
+        p.rigs[p.dressing] = RIG_BUILDERS[p.dressing](p, pool.indexOf(p));
+      }
+      // A slot may have flown a different prop last cast — only the live
+      // dressing's rig renders.
+      for (const [kind, rig] of Object.entries(p.rigs) as [DressingKind, DressingRig][]) {
+        rig.root.setEnabled(kind === p.dressing);
+      }
+      // In dressed mode the orb still flies (and drags the trail) but stays
+      // invisible — visibility is not inherited, so the prop renders.
+      p.orb.visibility = p.dressing ? 0 : 1;
+      p.trailBase = p.dressing === "smoke" ? 0.22 : 0.55;
+      const rig = p.dressing ? p.rigs[p.dressing] : undefined;
+      if (rig) {
+        for (const m of rig.mats) m.alpha = p.dressing === "smoke" ? 0.75 : 1;
+        if (p.dressing === "steak") rig.spin.rotation.x = Math.random() * Math.PI * 2;
+        if (p.dressing === "bell") rig.spin.rotation.y = Math.random() * Math.PI * 2;
+        if (p.dressing === "smoke") rig.spin.scaling.setAll(3.0);
+      }
+      // Same launch convention as the ult eye in freudCasts: the Tripo model
+      // looks down the wrapper's -Z, so visible "forward" is Backward().
+      hero.getDirection(Vector3.Backward()).normalizeToRef(fwd);
+      fwd.y = 0;
+      fwd.normalize();
+
+      p.target = spec.target ?? null;
+      p.hitRadius = spec.hitRadius ?? 1.2;
+      p.onHit = spec.onHit ?? null;
+
+      if (p.target) {
+        // Homing: initial heading straight at the target, no spread.
+        const dest = typeof p.target === "function" ? p.target() : p.target;
+        const h0 = hero.getAbsolutePosition();
+        p.origin.set(h0.x, h0.y + 1.35, h0.z);
+        dest.subtractToRef(p.origin, p.dir).normalize();
+      } else {
+        const spread = spec.spread ?? 0.4;
+        const yaw = (Math.random() * 2 - 1) * spread;
+        const cos = Math.cos(yaw);
+        const sin = Math.sin(yaw);
+        p.dir.set(fwd.x * cos - fwd.z * sin, 0.06 * Math.random(), fwd.x * sin + fwd.z * cos).normalize();
+        const h0 = hero.getAbsolutePosition();
+        p.origin.set(h0.x + p.dir.x * 0.5, h0.y + 1.35, h0.z + p.dir.z * 0.5);
+      }
+      p.side.set(-p.dir.z, 0, p.dir.x);
+      p.orb.position.copyFrom(p.origin);
+
+      p.speed = spec.speed;
+      p.life = spec.lifeSec;
+      p.age = 0;
+      p.wobble = spec.wobble ?? 0;
+      p.orb.scaling.setAll(spec.size);
+
+      p.mat.emissiveColor = spec.color.clone();
+      p.mat.alpha = 1;
+      p.trailMat.emissiveColor = spec.color.clone();
+      p.trailMat.alpha = 0.55;
+      p.trail.diameter = spec.size * 0.7;
+
+      p.orb.setEnabled(true);
+      p.trail.setEnabled(true);
+      // Drop the stale ribbon from the orb's previous flight before restarting.
+      p.trail.reset();
+      p.trail.start();
+      p.active = true;
+    },
+  };
+}

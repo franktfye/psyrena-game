@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PAVLOV — model viewer</title>
+<!--
+  Scratch lookdev page, NOT part of the app build. Served straight from
+  public/ by the vite dev server: http://<host>:5173/pavlov-viewer.html
+
+  Shows Druzhok (static bake + Mesh2Motion fox Walk/Run) and the current hero
+  rig (freud.glb) as a stand-in until pavlov.glb ships. Side-by-side mode is
+  for scale / facing.
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0b10; color: #ddd;
+               font: 13px/1.45 system-ui, sans-serif; overflow: hidden; }
+  #canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  #panel { position: absolute; top: 0; left: 0; bottom: 0; width: 300px; overflow-y: auto;
+           background: rgba(12,12,20,.88); border-right: 1px solid #2a2a3a; padding: 12px 14px;
+           box-sizing: border-box; backdrop-filter: blur(4px); }
+  h1 { font-size: 15px; margin: 0 0 2px; color: #f0c674; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+       color: #8a8aa0; margin: 16px 0 6px; }
+  .sub { color: #77778c; font-size: 11px; margin-bottom: 8px; }
+  button { display: block; width: 100%; margin: 3px 0; padding: 6px 9px; text-align: left;
+           background: #1c1c2a; color: #ddd; border: 1px solid #34344a; border-radius: 6px;
+           cursor: pointer; font: inherit; }
+  button:hover { background: #26263a; }
+  button.on { background: #3a2f14; border-color: #f0c674; color: #f0c674; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .row button { flex: 1; min-width: 0; }
+  #status { position: absolute; right: 12px; top: 10px; background: rgba(12,12,20,.8);
+            border: 1px solid #2a2a3a; border-radius: 8px; padding: 6px 12px;
+            font-size: 12px; color: #f0c674; max-width: 40%; }
+  .note { font-size: 11px; color: #66667a; margin-top: 4px; }
+  table { border-collapse: collapse; font-size: 11px; width: 100%; margin-top: 4px; }
+  td { border-top: 1px solid #26263a; padding: 3px 4px 3px 0; vertical-align: top; color: #9a9ab0; }
+  td:first-child { color: #c8c8dd; white-space: nowrap; }
+  label.slider { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 11px; color: #9a9ab0; }
+  label.slider input { flex: 1; }
+  #info { font-size: 11px; color: #9a9ab0; margin-top: 6px; white-space: pre-wrap; }
+</style>
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="panel">
+  <h1>PAVLOV model viewer</h1>
+  <div class="sub">click a clip = loop it &middot; shift-click = play once</div>
+
+  <h2>Model</h2>
+  <div class="row">
+    <button id="m-anim" class="on">Druzhok Walk/Run</button>
+  </div>
+  <div class="row">
+    <button id="m-pet">static bake</button>
+    <button id="m-retarget">retarget exp.</button>
+  </div>
+  <div class="row">
+    <button id="m-hero">Freud (hero ref)</button>
+    <button id="m-both">both (scale)</button>
+  </div>
+  <div class="note">
+    <b>Druzhok Walk/Run</b> = Mesh2Motion fox skeleton + native Walk/Run
+    (preferred). <b>static bake</b> = park prop. <b>retarget exp.</b> = Tripo
+    skeleton + remapped fox tracks. Freud is hero scale/clip reference until
+    pavlov.glb ships.
+  </div>
+
+  <h2>Facing / scale helpers</h2>
+  <label class="slider">yaw ° <input id="yaw" type="range" min="-180" max="180" value="0" step="5"><span id="yaw-v">0</span></label>
+  <label class="slider">height m <input id="height" type="range" min="0.2" max="2.2" value="0.62" step="0.02"><span id="height-v">0.62</span></label>
+  <div class="note">Druzhok park height is 0.62 m (tallest pet). Length-on-X → PET_CORGI_MODEL_YAW in villageHub.</div>
+
+  <h2>Clips in loaded model</h2>
+  <div id="clips"><div class="note">loading…</div></div>
+  <button id="stop">■ stop all</button>
+
+  <h2>Bounds</h2>
+  <div id="info">—</div>
+
+  <h2>Notes</h2>
+  <table>
+    <tr><td>anim</td><td>work/pavlov/shepherd-fox-walk-run-skinned.glb · fox rig · Walk + Run</td></tr>
+    <tr><td>retarget</td><td>work/pavlov/…-retarget.glb · Tripo bones · experimental</td></tr>
+    <tr><td>pet</td><td>village/pet_druzhok.glb · UASTC · ~1.5 MB · static</td></tr>
+    <tr><td>hero</td><td>heroes/freud.glb until pavlov.glb exists</td></tr>
+    <tr><td>equip</td><td>petPanel gates Druzhok on selectedHero === "pavlov"</td></tr>
+  </table>
+</div>
+<div id="status">booting…</div>
+
+<script>
+"use strict";
+// Same KTX2 transcoder wiring as src/core/assets.ts — pet GLB is
+// KHR_texture_basisu and goes magenta/fail without it.
+BABYLON.KhronosTextureContainer2.URLConfig = {
+  jsDecoderModule: "/ktx2/babylon.ktx2Decoder.js",
+  wasmUASTCToASTC: "/ktx2/uastc_astc.wasm",
+  wasmUASTCToBC7: "/ktx2/uastc_bc7.wasm",
+  wasmUASTCToRGBA_UNORM: "/ktx2/uastc_rgba8_unorm_v2.wasm",
+  wasmUASTCToRGBA_SRGB: "/ktx2/uastc_rgba8_srgb_v2.wasm",
+  wasmUASTCToR8_UNORM: "/ktx2/uastc_r8_unorm.wasm",
+  wasmUASTCToRG8_UNORM: "/ktx2/uastc_rg8_unorm.wasm",
+  jsMSCTranscoder: "/ktx2/msc_basis_transcoder.js",
+  wasmMSCTranscoder: "/ktx2/msc_basis_transcoder.wasm",
+  wasmZSTDDecoder: "/ktx2/zstddec.wasm",
+};
+
+const canvas = document.getElementById("canvas");
+const engine = new BABYLON.Engine(canvas, true);
+const scene = new BABYLON.Scene(engine);
+scene.clearColor = new BABYLON.Color4(0.043, 0.043, 0.063, 1);
+
+const camera = new BABYLON.ArcRotateCamera("cam", Math.PI / 2, 1.15, 6,
+  new BABYLON.Vector3(0, 0.6, 0), scene);
+camera.attachControl(canvas, true);
+camera.wheelDeltaPercentage = 0.02;
+camera.lowerRadiusLimit = 0.4;
+
+new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0, 1, 0), scene).intensity = 0.9;
+const dir = new BABYLON.DirectionalLight("dir", new BABYLON.Vector3(-0.4, -1, 0.5), scene);
+dir.intensity = 1.4;
+
+const ground = BABYLON.MeshBuilder.CreateGround("g", { width: 20, height: 20 }, scene);
+const gmat = new BABYLON.StandardMaterial("gm", scene);
+gmat.diffuseColor = new BABYLON.Color3(0.09, 0.09, 0.13);
+gmat.specularColor = BABYLON.Color3.Black();
+ground.material = gmat;
+
+// 1 m grid ring so scale is obvious at a glance.
+for (const r of [0.5, 1, 1.5]) {
+  const ring = BABYLON.MeshBuilder.CreateTorus("ring" + r, {
+    diameter: r * 2, thickness: 0.008, tessellation: 64,
+  }, scene);
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = 0.004;
+  const rm = new BABYLON.StandardMaterial("rm" + r, scene);
+  rm.diffuseColor = new BABYLON.Color3(0.18, 0.18, 0.28);
+  rm.emissiveColor = new BABYLON.Color3(0.05, 0.05, 0.1);
+  rm.specularColor = BABYLON.Color3.Black();
+  ring.material = rm;
+}
+
+const status = document.getElementById("status");
+const clipsDiv = document.getElementById("clips");
+const infoDiv = document.getElementById("info");
+const say = (t) => { status.textContent = t; };
+
+const MODELS = {
+  // Preferred lookdev: Mesh2Motion fox skeleton + native Walk/Run.
+  anim: {
+    rootUrl: "/assets/work/pavlov/",
+    file: "shepherd-fox-walk-run-skinned.glb",
+    label: "Druzhok Walk/Run",
+    autoPlay: "Walk",
+  },
+  // Experimental: keep Tripo skeleton, rename fox tracks onto it.
+  retarget: {
+    rootUrl: "/assets/work/pavlov/",
+    file: "shepherd-fox-walk-run-retarget.glb",
+    label: "Druzhok retarget (exp.)",
+    autoPlay: "Walk",
+  },
+  // Shipped park prop (static, no clips).
+  pet:  { rootUrl: "/assets/village/", file: "pet_druzhok.glb", label: "Druzhok static" },
+  hero: { rootUrl: "/assets/heroes/",  file: "freud.glb",       label: "Freud (hero ref)" },
+};
+
+// Park height for Druzhok (villageHub PET_PARK_ROSTER).
+const PET_TARGET_HEIGHT = 0.62;
+// Rough hero eye-line height used for freud framing in the hub (not exact).
+const HERO_TARGET_HEIGHT = 1.75;
+
+const PET_KEYS = new Set(["anim", "retarget", "pet"]);
+
+const cache = {}; // key -> { root, groups, nativeHeight }
+let current = "anim";
+let bothMode = false;
+
+async function load(key) {
+  if (cache[key]) return cache[key];
+  const m = MODELS[key];
+  say("loading " + m.file + " …");
+  const r = await BABYLON.SceneLoader.ImportMeshAsync("", m.rootUrl, m.file, scene);
+  const root = r.meshes[0];
+  for (const g of r.animationGroups) g.stop();
+  const groups = r.animationGroups.slice();
+  // Measure native height before any scale.
+  root.computeWorldMatrix(true);
+  const { min, max } = root.getHierarchyBoundingVectors(true);
+  const nativeHeight = Math.max(0.001, max.y - min.y);
+  // Sit feet on ground.
+  root.position.y -= min.y;
+  root.setEnabled(false);
+  cache[key] = { root, groups, nativeHeight, minX: min.x, maxX: max.x, minZ: min.z, maxZ: max.z };
+  return cache[key];
+}
+
+function findClip(groups, name) {
+  if (!name || !groups) return null;
+  const want = String(name).toLowerCase();
+  return groups.find((g) => String(g.name).toLowerCase() === want)
+    || groups.find((g) => String(g.name).toLowerCase().includes(want))
+    || null;
+}
+
+function autoPlayIfAny(key) {
+  const m = MODELS[key];
+  const entry = cache[key];
+  if (!m || !entry || !m.autoPlay) return;
+  const g = findClip(entry.groups, m.autoPlay);
+  if (!g) return;
+  stopAll();
+  g.speedRatio = 1;
+  g.reset();
+  g.play(true);
+  say("loop: " + g.name + " — " + m.file);
+}
+
+function applyScale(key, targetHeight) {
+  const m = cache[key];
+  if (!m) return;
+  const s = targetHeight / m.nativeHeight;
+  m.root.scaling.setAll(s);
+  // Re-sit after scale (bounding can shift if pivot isn't at feet).
+  m.root.computeWorldMatrix(true);
+  const { min } = m.root.getHierarchyBoundingVectors(true);
+  m.root.position.y -= min.y;
+}
+
+function applyYaw(key, deg) {
+  const m = cache[key];
+  if (!m) return;
+  m.root.rotation.y = (deg * Math.PI) / 180;
+}
+
+function frameVisible() {
+  const roots = [];
+  for (const k in cache) if (cache[k].root.isEnabled()) roots.push(cache[k].root);
+  if (roots.length === 0) return;
+  let min = new BABYLON.Vector3(Infinity, Infinity, Infinity);
+  let max = new BABYLON.Vector3(-Infinity, -Infinity, -Infinity);
+  for (const r of roots) {
+    r.computeWorldMatrix(true);
+    const b = r.getHierarchyBoundingVectors(true);
+    min = BABYLON.Vector3.Minimize(min, b.min);
+    max = BABYLON.Vector3.Maximize(max, b.max);
+  }
+  const c = min.add(max).scale(0.5);
+  const size = max.subtract(min).length();
+  camera.setTarget(c);
+  camera.radius = Math.max(1.5, size * 1.35);
+}
+
+function boundsText() {
+  const lines = [];
+  for (const key of Object.keys(MODELS)) {
+    const m = cache[key];
+    if (!m || !m.root.isEnabled()) continue;
+    m.root.computeWorldMatrix(true);
+    const { min, max } = m.root.getHierarchyBoundingVectors(true);
+    const w = (max.x - min.x).toFixed(3);
+    const h = (max.y - min.y).toFixed(3);
+    const d = (max.z - min.z).toFixed(3);
+    lines.push(
+      MODELS[key].label + "\n" +
+      "  W " + w + "  H " + h + "  D " + d + " m\n" +
+      "  nativeH " + m.nativeHeight.toFixed(3) + "  scale " + m.root.scaling.x.toFixed(3) +
+      "  yaw " + ((m.root.rotation.y * 180) / Math.PI).toFixed(0) + "°"
+    );
+  }
+  infoDiv.textContent = lines.join("\n\n") || "—";
+}
+
+function stopAll() {
+  for (const k in cache) for (const g of cache[k].groups) {
+    g.speedRatio = 1;
+    g.stop();
+  }
+}
+
+function renderClipButtons(groups) {
+  clipsDiv.innerHTML = "";
+  if (!groups || groups.length === 0) {
+    clipsDiv.innerHTML = '<div class="note">no clips (static model)</div>';
+    return;
+  }
+  for (const g of groups) {
+    const b = document.createElement("button");
+    const secs = ((g.to - g.from) / 30).toFixed(1);
+    b.textContent = g.name + "  ·  ~" + secs + " s";
+    b.onclick = (ev) => {
+      stopAll();
+      g.speedRatio = 1;
+      g.reset(); g.play(!ev.shiftKey);
+      say((ev.shiftKey ? "once: " : "loop: ") + g.name);
+    };
+    clipsDiv.appendChild(b);
+  }
+}
+
+function setButtons(active) {
+  document.querySelectorAll("#panel .row button").forEach((b) =>
+    b.classList.toggle("on", b.id === "m-" + active));
+}
+
+async function show(mode) {
+  stopAll();
+  bothMode = mode === "both";
+  current = mode === "both" ? "both" : mode;
+
+  if (mode === "both") {
+    // Scale check: animated Druzhok + Freud (prefer anim over static bake).
+    await Promise.all([load("anim"), load("hero")]);
+    for (const k in cache) {
+      if (cache[k]) cache[k].root.setEnabled(k === "anim" || k === "hero");
+    }
+    // Side by side: hero left, pet right.
+    cache.hero.root.position.x = -0.7;
+    cache.anim.root.position.x = 0.9;
+    applyScale("hero", Number(heightEl.value) > 1 ? Number(heightEl.value) : HERO_TARGET_HEIGHT);
+    applyScale("anim", PET_TARGET_HEIGHT);
+    applyYaw("anim", Number(yawEl.value));
+    applyYaw("hero", Number(yawEl.value));
+    const groups = [...cache.anim.groups, ...cache.hero.groups];
+    renderClipButtons(groups);
+    setButtons("both");
+    frameVisible();
+    boundsText();
+    autoPlayIfAny("anim");
+    say("both — freud + druzhok Walk/Run side by side");
+    return;
+  }
+
+  await load(mode);
+  for (const k in cache) cache[k].root.setEnabled(k === mode);
+  cache[mode].root.position.x = 0;
+  const isPet = PET_KEYS.has(mode);
+  const defaultH = isPet ? PET_TARGET_HEIGHT : HERO_TARGET_HEIGHT;
+  if (isPet) heightEl.value = String(PET_TARGET_HEIGHT);
+  else heightEl.value = String(HERO_TARGET_HEIGHT);
+  heightVal.textContent = heightEl.value;
+  applyScale(mode, Number(heightEl.value) || defaultH);
+  applyYaw(mode, Number(yawEl.value));
+  renderClipButtons(cache[mode].groups);
+  setButtons(mode);
+  frameVisible();
+  boundsText();
+  if (MODELS[mode].autoPlay) autoPlayIfAny(mode);
+  else say(MODELS[mode].label + " — " + MODELS[mode].file);
+}
+
+const yawEl = document.getElementById("yaw");
+const yawVal = document.getElementById("yaw-v");
+const heightEl = document.getElementById("height");
+const heightVal = document.getElementById("height-v");
+
+yawEl.oninput = () => {
+  yawVal.textContent = yawEl.value;
+  if (bothMode) {
+    applyYaw("anim", Number(yawEl.value));
+    applyYaw("hero", Number(yawEl.value));
+  } else if (cache[current]) {
+    applyYaw(current, Number(yawEl.value));
+  }
+  boundsText();
+};
+
+heightEl.oninput = () => {
+  heightVal.textContent = heightEl.value;
+  if (bothMode) {
+    // In both-mode the height slider drives the pet only (hero stays ~1.75).
+    applyScale("anim", Number(heightEl.value));
+  } else if (cache[current]) {
+    applyScale(current, Number(heightEl.value));
+  }
+  frameVisible();
+  boundsText();
+};
+
+document.getElementById("m-anim").onclick = () => show("anim");
+document.getElementById("m-pet").onclick = () => show("pet");
+document.getElementById("m-retarget").onclick = () => show("retarget");
+document.getElementById("m-hero").onclick = () => show("hero");
+document.getElementById("m-both").onclick = () => show("both");
+document.getElementById("stop").onclick = () => { stopAll(); say("stopped"); };
+
+engine.runRenderLoop(() => scene.render());
+addEventListener("resize", () => engine.resize());
+
+// Deep-link: ?model=anim|retarget|pet|hero|both
+const q = new URLSearchParams(location.search).get("model");
+const start = (q && (MODELS[q] || q === "both")) ? q : "anim";
+show(start).catch((e) => say("load failed: " + e.message));
+</script>
+</body>
+</html>

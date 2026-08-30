@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" href="data:," />
+<title>FREUD — procedural viewer</title>
+<!--
+  Scratch lookdev page, NOT part of the app build. Served straight from
+  public/ by the vite dev server: http://<host>:5173/freud-procedural.html
+
+  Renders the code-only procedural Freud (src/proceduralFreud/, ported from the
+  img2threejs showcase): implicit-surface mesh + 21-joint procedural rig with a
+  Fourier walk and idle. three.js is a dev-only dependency used by this page
+  alone; the game itself is BabylonJS.
+
+  Capture hooks (survived the port): ?anim=walk|idle&phase=0..1 freezes a pose,
+  ?quality=high|medium|low picks the surface level.
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0b10; color: #ddd;
+               font: 13px/1.45 system-ui, sans-serif; overflow: hidden; }
+  #canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  #panel { position: absolute; top: 0; left: 0; bottom: 0; width: 300px; overflow-y: auto;
+           background: rgba(12,12,20,.88); border-right: 1px solid #2a2a3a; padding: 12px 14px;
+           box-sizing: border-box; backdrop-filter: blur(4px); }
+  h1 { font-size: 15px; margin: 0 0 2px; color: #f0c674; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+       color: #8a8aa0; margin: 16px 0 6px; }
+  .sub { color: #77778c; font-size: 11px; margin-bottom: 8px; }
+  button { display: block; width: 100%; margin: 3px 0; padding: 6px 9px; text-align: left;
+           background: #1c1c2a; color: #ddd; border: 1px solid #34344a; border-radius: 6px;
+           cursor: pointer; font: inherit; }
+  button:hover { background: #26263a; }
+  button.on { background: #3a2f14; border-color: #f0c674; color: #f0c674; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .row button { flex: 1; min-width: 0; }
+  #status { position: absolute; right: 12px; top: 10px; background: rgba(12,12,20,.8);
+            border: 1px solid #2a2a3a; border-radius: 8px; padding: 6px 12px;
+            font-size: 12px; color: #f0c674; max-width: 45%; }
+  .note { font-size: 11px; color: #66667a; margin-top: 4px; }
+  label.slider { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 11px; color: #9a9ab0; }
+  label.slider input { flex: 1; }
+  #info { font-size: 11px; color: #9a9ab0; margin-top: 6px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="panel">
+  <h1>FREUD procedural viewer</h1>
+  <div class="sub">code-only character &middot; SDF surface nets &middot; 21-joint procedural rig</div>
+
+  <h2>Animation</h2>
+  <div class="row">
+    <button id="a-idle" class="on">Idle</button>
+    <button id="a-walk">Walk</button>
+    <button id="a-stop">■ Stop</button>
+  </div>
+  <label class="slider">speed <input id="speed" type="range" min="0" max="3" value="1" step="0.05"><span id="speed-v">1.00</span></label>
+
+  <h2>Quality (reloads)</h2>
+  <div class="row">
+    <button id="q-high" class="on">High 866K△</button>
+    <button id="q-medium">Medium 292K△</button>
+    <button id="q-low">Low 134K△</button>
+  </div>
+
+  <h2>Compare</h2>
+  <button id="glb">reference freud.glb side-by-side</button>
+  <div class="note">hero GLB (Babylon asset) loaded with three's GLTFLoader, scaled to the same 1.003 m height, placed to the right.</div>
+
+  <h2>Model</h2>
+  <div id="info">—</div>
+
+  <h2>Notes</h2>
+  <div class="note">
+    ?anim=walk|idle&amp;phase=0..1 freezes one pose (deterministic captures).<br>
+    ?quality=high|medium|low switches surface level.<br>
+    window.freudViewer = { ready, model, controller, vertexCount, jointCount }.
+  </div>
+</div>
+<div id="status">booting…</div>
+<script type="module" src="/src/proceduralFreud/viewer.ts"></script>
+</body>
+</html>

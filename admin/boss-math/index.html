@@ -1,0 +1,2878 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Psyrena — Boss Math Design Sheet</title>
+<style>
+  /* Dark game-admin console. Tokens from the validated dataviz reference palette
+     (dark column); the tool deliberately commits to a single dark look. */
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --surface-2: #222220;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5;  /* S5 basics   */
+    --series-2: #d95926;  /* S1 palette  */
+    --series-3: #199e70;  /* S2 defense  */
+    --series-4: #c98500;  /* S3 chain    */
+    --series-5: #8f6fd6;  /* S4 ultimate */
+    --series-6: #c2557f;  /* P2 debuff   */
+    --good: #0ca30c;
+    --warning: #fab219;
+    --serious: #ec835a;
+    --critical: #d03b3b;
+    --code: #86b6ef;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline;
+    padding: 16px 20px 8px;
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  header .spacer { flex: 1; }
+  main { padding: 0 20px 40px; max-width: 1400px; margin: 0 auto; }
+  .cols { display: grid; grid-template-columns: minmax(420px, 3fr) minmax(360px, 2fr); gap: 16px; align-items: start; }
+  @media (max-width: 1020px) { .cols { grid-template-columns: 1fr; } }
+  section.panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; margin-top: 16px;
+  }
+  section.panel h2, .panelbody > h2 {
+    margin: 0 0 10px; font-size: 13px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-2);
+  }
+  section.panel h2 .hint, .panelbody > h2 .hint { text-transform: none; letter-spacing: 0; color: var(--muted); font-weight: 400; }
+  section.panel.accent { border-color: rgba(57,135,229,0.45); }
+  table { border-collapse: collapse; width: 100%; }
+  th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 4px 8px; border-bottom: 1px solid var(--baseline); }
+  td { padding: 4px 8px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: none; }
+  tr.bench td { opacity: 0.45; }
+  tr.total td { border-top: 1px solid var(--baseline); font-weight: 600; }
+  input[type=number], select {
+    background: var(--surface-2); color: var(--ink); border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 13px;
+  }
+  input[type=number] { width: 68px; text-align: right; font-variant-numeric: tabular-nums; }
+  input[type=number].wide { width: 92px; }
+  input[type=number].tiny { width: 54px; }
+  input[type=range] { accent-color: var(--series-1); vertical-align: middle; }
+  input[type=checkbox], input[type=radio] { accent-color: var(--series-1); }
+  select { max-width: 240px; }
+  button {
+    background: var(--surface-2); color: var(--ink); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 12px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  button.primary { border-color: var(--series-1); }
+  button.mini { padding: 1px 8px; font-size: 12px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+  .controls label { color: var(--ink-2); font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
+  .controls .val { color: var(--ink); font-variant-numeric: tabular-nums; min-width: 40px; display: inline-block; }
+  .prov { font-size: 10px; border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; color: var(--muted); vertical-align: 1px; white-space: nowrap; }
+  .prov.code { color: var(--code); border-color: rgba(134,182,239,0.4); }
+  .prov.doc  { color: var(--ink-2); }
+  .prov.assumed, .prov.design { color: var(--warning); border-color: rgba(250,178,25,0.4); }
+  .key {
+    display: inline-block; min-width: 22px; text-align: center; font-size: 11px;
+    border: 1px solid var(--border); border-radius: 4px; padding: 0 4px;
+    background: var(--page); color: var(--ink-2); font-variant-numeric: tabular-nums;
+  }
+  /* Layman explanation bubbles */
+  .term {
+    border-bottom: 1px dashed var(--muted); cursor: help; font-weight: inherit;
+    text-decoration: none; background: none; color: inherit; padding: 0;
+  }
+  .term:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; border-radius: 2px; }
+  #bubble {
+    position: fixed; z-index: 50; max-width: 320px; display: none;
+    background: var(--surface-2); border: 1px solid rgba(57,135,229,0.5); border-radius: 8px;
+    padding: 9px 11px; box-shadow: 0 8px 26px rgba(0,0,0,0.6); font-size: 12.5px; line-height: 1.5;
+  }
+  #bubble .btitle { color: var(--ink); font-weight: 600; margin-bottom: 3px; }
+  #bubble .bbody { color: var(--ink-2); }
+  #bubble .bmath { color: var(--muted); margin-top: 5px; font-size: 11.5px; border-top: 1px solid var(--grid); padding-top: 5px; }
+  #bubble .bmath code { color: var(--code); }
+  /* Stat tiles */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+  .tile { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .tile .label { color: var(--muted); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
+  .tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
+  .tile .note { color: var(--ink-2); font-size: 12px; margin-top: 2px; }
+  .status { font-size: 12px; font-weight: 600; }
+  .status.good { color: var(--good); }
+  .status.warning { color: var(--warning); }
+  .status.serious { color: var(--serious); }
+  .status.critical { color: var(--critical); }
+  /* Chart */
+  .chartwrap { position: relative; overflow-x: auto; }
+  .chartwrap svg { display: block; width: 100%; height: auto; min-width: 640px; }
+  #tooltip {
+    position: absolute; pointer-events: none; display: none;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 9px; font-size: 12px; color: var(--ink-2); white-space: nowrap; z-index: 5;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+  }
+  #tooltip b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  /* Stacked breakdown bar */
+  .stack { display: flex; height: 26px; border-radius: 5px; overflow: hidden; gap: 2px; background: var(--page); }
+  .stack .seg { display: flex; align-items: center; justify-content: center; font-size: 11px; color: #0b0b0b; font-weight: 600; min-width: 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 6px; font-size: 12px; color: var(--ink-2); }
+  .legend .chip { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  details { margin-top: 16px; }
+  details summary { cursor: pointer; color: var(--ink-2); font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; }
+  details .panelbody { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; margin-top: 8px; }
+  .warnbox { border-left: 3px solid var(--warning); background: var(--surface-2); padding: 8px 12px; border-radius: 0 6px 6px 0; font-size: 13px; color: var(--ink-2); margin-top: 10px; }
+  .okbox { border-left: 3px solid var(--good); background: var(--surface-2); padding: 8px 12px; border-radius: 0 6px 6px 0; font-size: 13px; color: var(--ink-2); margin-top: 10px; }
+  .footnote { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .phase-band-label { fill: var(--muted); font-size: 11px; }
+  .tablewrap { overflow-x: auto; }
+  #phaseTable input[type=number] { width: 54px; }
+  #phaseTable td, #phaseTable th { padding: 4px 5px; }
+  /* One card per row until the viewport can hold two full 11-column tables. */
+  .slotgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(760px, 1fr)); gap: 14px; }
+  .slotcard { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .slotcard h3 { margin: 0 0 6px; font-size: 13px; }
+  .slotcard h3 .role { color: var(--muted); font-weight: 400; font-size: 12px; }
+  .slotcard table { min-width: 720px; }
+  .slotcard table td, .slotcard table th { padding: 3px 4px; font-size: 12px; }
+  .slotcard input[type=number] { width: 48px; padding: 2px 4px; font-size: 12px; }
+  .slotcard td:nth-child(2) { min-width: 128px; }
+  .sugg td { vertical-align: top; }
+  .sugg .why { color: var(--muted); font-size: 12px; }
+  .delta.up { color: var(--good); }
+  .delta.down { color: var(--serious); }
+  pre.json {
+    background: var(--page); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; font-size: 11.5px; color: var(--ink-2); max-height: 340px; overflow: auto;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Psyrena — Boss Math Design Sheet</h1>
+  <span class="sub">stats extracted 2026-07-31 · <span class="prov code">code</span> implemented · <span class="prov doc">doc</span> design canon · <span class="prov design">design</span> input this sheet proposes</span>
+  <span class="spacer"></span>
+  <button id="btnExport" class="primary">Export JSON</button>
+  <button id="btnCopy">Copy JSON</button>
+  <button id="btnImport">Import JSON</button>
+  <input type="file" id="fileImport" accept=".json" style="display:none" />
+</header>
+<main>
+
+  <!-- ============================ GLOBAL KNOBS ============================ -->
+  <section class="panel">
+    <h2>Global model <span class="hint">— the one <span class="term" data-t="pipeline">damage pipeline</span>: Hit = <span class="term" data-t="base">Base</span> × <span class="term" data-t="beat">Beat</span> × (1 + 0.06×<span class="term" data-t="mark">Marks</span>) × (1+<span class="term" data-t="amp">Amp</span>) × <span class="term" data-t="gear">Gear</span> × <span class="term" data-t="format">Format</span> <span class="prov code">code</span></span></h2>
+    <div class="controls">
+      <label><span class="term" data-t="format">Format</span>
+        <select id="inFormat">
+          <option value="match">match ×1.00</option>
+          <option value="solo">solo ×0.80</option>
+        </select>
+      </label>
+      <label>
+        <input type="checkbox" id="inBeatRule" checked /> <span class="term" data-t="p1">P-1: Beat applies to skills</span> <span class="prov code">code default</span>
+      </label>
+      <label><span class="term" data-t="gear">Gear</span> <input type="range" id="inGear" min="1" max="1.12" step="0.01" value="1.12" /> <span class="val" id="outGear">×1.12</span></label>
+      <label>Steady <span class="term" data-t="amp">Amp</span> <input type="range" id="inAmp" min="0" max="50" step="1" value="20" /> <span class="val" id="outAmp">20%</span></label>
+      <label><span class="term" data-t="window">Palette window</span> <input type="number" id="inWindow" min="3" max="15" step="0.5" value="8" /> s</label>
+      <label><span class="term" data-t="ultAt">Ult fires at</span> <input type="number" id="inUltAt" min="1" max="10" step="1" value="6" /> Marks</label>
+      <label><span class="term" data-t="maxConsumed">Marks per ult</span> <input type="number" id="inMaxConsumed" min="1" max="10" step="1" value="6" /></label>
+      <label><span class="term" data-t="focus">Focus regen</span> <input type="number" id="inFocusRegen" min="0" max="60" step="1" value="12" /> /s <span class="prov design">design</span></label>
+    </div>
+    <div class="footnote"><span class="term" data-t="gcd">GCD / beat length</span> 1.5 s <span class="prov code">villageHub.ts:3764</span> · Mark duration 20 s, cap 10 <span class="prov doc">doc 02</span> · Amp is a steady-state slider because open issue S-1 says a competent healer pins the 0.5 cap.</div>
+  </section>
+
+  <!-- ======================= DIFFICULTY × CONFIGURATION ======================= -->
+  <section class="panel accent">
+    <h2><span class="term" data-t="difficulty">Difficulty</span> × <span class="term" data-t="corner">configuration matrix</span>
+      <span class="hint">— every boss ships in three difficulties, and each one is tuned against the same four corners</span></h2>
+    <div class="controls" style="margin-bottom:10px">
+      <label>Editing
+        <select id="inDiff">
+          <option value="standard">Standard</option>
+          <option value="hard">Hard</option>
+          <option value="nightmare">Nightmare</option>
+        </select>
+      </label>
+      <span class="footnote" style="margin:0">the editors below (boss phases, team, buffs) act on the selected difficulty's reference run</span>
+    </div>
+    <div class="tablewrap"><table id="diffTable">
+      <thead><tr>
+        <th>Difficulty</th>
+        <th><span class="term" data-t="refCorner">Tuned for</span></th>
+        <th class="num"><span class="term" data-t="killFrac">Kill target</span></th>
+        <th class="num">Boss dmg ×</th>
+        <th class="num">Regen ×</th>
+        <th class="num"><span class="term" data-t="window">Window</span> ×</th>
+        <th class="num">HP @3</th><th class="num">HP @5</th>
+        <th><span class="term" data-t="gate">Gate</span></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <h2 style="margin-top:16px">Clear matrix <span class="hint">— kill time per corner at that difficulty's HP; ✕ = enrage wipe, which is the intended answer for corners below the tuning target</span></h2>
+    <div class="tablewrap"><table id="matrixTable">
+      <thead><tr><th>Difficulty</th><th class="num">3-man · no gear</th><th class="num">3-man · full gear</th><th class="num">5-man · no gear</th><th class="num">5-man · full gear</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="footnote">Corners are the four combinations the design has to hold up in: team size <b>3</b> or <b>5</b> (doc 01 — 3 is the minimum to queue) × gear <b>×1.00</b> (fresh) or <b>×1.12</b> (full BiS, the 12% Rule). Boss HP is derived <b>per tier per team size</b> at that tier's reference gear, so headcount never decides the outcome — a 3-stack and a 5-stack meet an equally hard boss. What separates the tiers is <b>slack</b>: gear is worth only ~11% of kill time, so a tier locks out an under-geared group only when its kill target sits inside that 11% of the <span class="term" data-t="enrage">enrage</span> timer. Boss-damage and regen multipliers change how the fight feels and how much healing it demands, but they cannot gate anyone while <b>no hero HP exists in canon</b> and deaths therefore aren't simulated.</div>
+  </section>
+
+  <!-- ============================ BUFFS ============================ -->
+  <section class="panel">
+    <h2>Player buffs &amp; <span class="term" data-t="coverage">coverage</span> <span class="hint">— what the team's own attack and defensive cooldowns are worth once you account for how much of the fight they actually cover</span></h2>
+    <div class="controls">
+      <label><span class="term" data-t="atkBuff">Attack buff</span> <input type="range" id="inAtkMag" min="0" max="60" step="5" value="15" /> <span class="val" id="outAtkMag">+15%</span></label>
+      <label>coverage <input type="range" id="inAtkCov" min="0" max="100" step="5" value="60" /> <span class="val" id="outAtkCov">60%</span></label>
+      <label><input type="checkbox" id="inUseKitMit" checked /> <span class="term" data-t="kitMitigation">Mitigation from the team's kits</span> <span class="prov doc">doc 08</span></label>
+      <label><span class="term" data-t="defBuff">Manual mitigation</span> <input type="range" id="inDefMag" min="0" max="80" step="5" value="30" /> <span class="val" id="outDefMag">30%</span></label>
+      <label>coverage <input type="range" id="inDefCov" min="0" max="100" step="5" value="50" /> <span class="val" id="outDefCov">50%</span></label>
+    </div>
+    <div class="tiles" id="buffTiles" style="margin-top:12px"></div>
+    <div class="tablewrap" style="margin-top:12px"><table id="mitTable">
+      <thead><tr><th>Source</th><th>Slot</th><th class="num">Magnitude</th><th class="num">Duration</th><th class="num" title="How often the button actually gets pressed — cooldown for E/R/F, answer window for the palette">Recast</th><th class="num">Duty × reach</th><th class="num">Effective</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="footnote" style="margin-bottom:0">Attack buffs are <b>separate from <span class="term" data-t="amp">Amp</span></b>: doc 03 gives them as Power/damage buffs (Vygotsky <i>Cultural Tools</i> +15% Power, Bandura <i>Self-Efficacy</i> +10% per success to +50%, Seligman <i>Signature Strengths</i>), while Amp is the support/overheal term in the pipeline. Defensive coverage is the mitigation side (Freud <i>Defense Mechanism</i>, Piaget <i>Schema Shield</i>, Ainsworth <i>Safe Haven</i>, Maslow <i>Safety Needs</i> 12% max-HP shield, Pavlov's 20% DR inside his phase). Coverage is the honest half of the number: a 30% mitigation that is up half the fight is worth 15%.</div>
+  </section>
+
+  <!-- ============================ HERO HP ============================ -->
+  <section class="panel">
+    <h2><span class="term" data-t="heroHp">Hero HP</span> <span class="hint">— derived, because canon has none: doc 02 lists the HP stat and never gives it a value</span></h2>
+    <div class="controls" style="margin-bottom:12px">
+      <label><span class="term" data-t="ttl">Time to live</span> <input type="number" id="inTtl" class="tiny" min="2" max="40" step="1" value="8" /> s unhealed <span class="prov design">design</span></label>
+      <label><span class="term" data-t="oneShot">Biggest hit ≤</span> <input type="number" id="inMaxHit" class="tiny" min="5" max="90" step="5" value="30" /> % of HP <span class="prov design">design</span></label>
+      <label>Tank × <input type="number" id="inHpTank" class="tiny" min="1" max="3" step="0.05" value="1.6" /></label>
+      <label>Support × <input type="number" id="inHpSupport" class="tiny" min="0.5" max="2" step="0.05" value="1.05" /></label>
+      <label>Healer × <input type="number" id="inHpHealer" class="tiny" min="0.5" max="2" step="0.05" value="0.9" /></label>
+    </div>
+    <div class="tiles" id="hpTiles"></div>
+    <div class="cols" style="margin-top:14px">
+      <div>
+        <h2>HP by role</h2>
+        <div class="tablewrap"><table id="hpTable">
+          <thead><tr><th>Role</th><th class="num">×</th><th class="num">HP</th>
+            <th class="num" title="Seconds alive, unhealed, under the worst single-target stream">TTL vs focus</th>
+            <th class="num" title="Seconds alive, unhealed, under the worst AOE stream">TTL vs AOE</th>
+            <th class="num">Biggest hit</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+      <div>
+        <h2>What that makes the heals worth <span class="hint">— doc 08's numbers, in % of a bar</span></h2>
+        <div class="tablewrap"><table id="healSizeTable">
+          <thead><tr><th>Healer skill</th><th class="num">Heal</th><th class="num">of a healer's HP</th><th class="num">of a tank's HP</th><th>Reads as</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+    </div>
+    <div class="footnote">HP is an <b>output</b> of the fight's shape, not an input to the damage sim — nothing above changes kill times. The reference bar is sized against the worst stream <i>any single target</i> faces, so a taunt drop or a misdirect is survivable rather than instantly lethal, then role weights spread it. Doc 02's death rules (20 s bleed-out, 3 s revive channel) are what the <span class="term" data-t="ttl">time-to-live</span> window is buying.</div>
+  </section>
+
+  <!-- ======================= OPTIMIZER (shown by default) ======================= -->
+  <section class="panel accent">
+    <h2>Optimized suggestions <span class="hint">— recomputed on every change; each row is a number this sheet recommends you ship</span></h2>
+    <div class="controls" style="margin-bottom:10px">
+      <button id="btnApplyAll" class="primary">Apply all suggestions</button>
+      <span class="footnote" style="margin:0" id="suggStatus">solving…</span>
+    </div>
+    <div class="tablewrap"><table id="suggTable" class="sugg">
+      <thead><tr><th>Parameter</th><th class="num">Current</th><th class="num">Suggested</th><th>Why</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="footnote">Targets the optimizer solves against: damage mix <b>S1 40% · S2+S3 15% · S4 20% · S5 25%</b> (±5 pts, measured across hero slots only — the P2 debuff is counted separately), <span class="term" data-t="fortress">Fortress</span> net <b>−0.30% max HP/s</b> with the boss self-healing no more than <b>20% of max HP per armored pass</b>, kill at <b>80%</b> of the <span class="term" data-t="enrage">enrage</span> timer, <span class="term" data-t="focus">Focus</span> demand ≤ regen.</div>
+  </section>
+
+  <div class="cols">
+  <!-- ============================ TEAM ============================ -->
+  <section class="panel">
+    <h2>Team <span class="hint">— <span class="term" data-t="teamSize">3 players minimum</span> to start a battle; slots 4–5 are optional</span></h2>
+    <div class="controls" style="margin-bottom:10px">
+      <label>Team size
+        <select id="inTeamSize">
+          <option value="3">3 (minimum)</option>
+          <option value="4">4</option>
+          <option value="5">5 (full)</option>
+        </select>
+      </label>
+      <span id="compCheck" class="status"></span>
+    </div>
+    <table id="teamTable">
+      <thead><tr>
+        <th>Slot</th><th>Hero</th>
+        <th class="num"><span class="term" data-t="acc">Acc %</span></th>
+        <th class="num"><span class="term" data-t="payoff">Payoff %</span></th>
+        <th class="num"><span class="term" data-t="uptime">Uptime %</span></th>
+        <th class="num"><span class="term" data-t="foreign">Foreign %</span></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <h2 style="margin-top:16px">Per-hero output</h2>
+    <div class="tablewrap"><table id="heroOut">
+      <thead><tr>
+        <th>Hero</th>
+        <th class="num"><span class="term" data-t="ceiling">Ceiling hit</span></th>
+        <th class="num"><span class="term" data-t="maxUlt">Max ult</span></th>
+        <th class="num"><span class="term" data-t="dps">Sust. DPS</span></th>
+        <th class="num">Healing/s</th>
+        <th class="num"><span class="term" data-t="focus">Focus/s</span></th>
+        <th class="num">Share</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="footnote" id="workedExample"></div>
+  </section>
+
+  <!-- ============================ BOSS ============================ -->
+  <section class="panel">
+    <h2>Boss</h2>
+    <div class="controls" style="margin-bottom:10px">
+      <label>Preset
+        <select id="inBoss">
+          <option value="nightmare">NIGHTMARE (implemented)</option>
+          <option value="regressor">THE REGRESSOR (doc)</option>
+          <option value="custom">Custom</option>
+        </select>
+      </label>
+      <label><span class="term" data-t="enrage">Enrage</span> <input type="number" id="inEnrage" class="wide" min="60" max="1200" step="10" value="480" /> s</label>
+    </div>
+    <div class="controls" style="margin-bottom:10px">
+      <label><input type="radio" name="hpMode" id="hpDerive" checked /> <span class="term" data-t="deriveHp">Derive HP from target kill</span></label>
+      <label>target <input type="number" id="inKillTarget" class="wide" min="60" max="1200" step="10" value="390" /> s</label>
+      <label><input type="radio" name="hpMode" id="hpFixed" /> Fixed HP</label>
+      <label><input type="number" id="inHp" class="wide" min="1000" max="99999999" step="1000" value="250000" /></label>
+    </div>
+    <div class="tablewrap"><table id="phaseTable">
+      <thead><tr>
+        <th>Phase</th><th class="num">Dur s</th>
+        <th class="num"><span class="term" data-t="taken">Dmg taken</span></th>
+        <th class="num"><span class="term" data-t="regen">Regen %/s</span></th>
+        <th class="num">Hit</th>
+        <th class="num">Per s</th>
+        <th><span class="term" data-t="aoe">AOE</span></th>
+        <th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="controls" style="margin-top:8px">
+      <button id="btnAddPhase">+ phase</button>
+    </div>
+    <div class="controls" style="margin-top:12px" id="p2Controls">
+      <label><span class="term" data-t="skillCheck">P2 check success</span> <input type="range" id="inP2" min="0" max="100" step="5" value="80" /> <span class="val" id="outP2">80%</span></label>
+      <label><span class="term" data-t="dot">Debuff DoT/stack</span> <input type="number" id="inDot" min="0" max="5" step="0.05" value="0.35" /> % max HP/s <span class="prov design">design</span></label>
+      <label>Debuff dur <input type="number" id="inDotDur" min="10" max="300" step="5" value="105" /> s <span class="prov design">design</span></label>
+      <label><input type="checkbox" id="inDotArmorOnly" checked /> <span class="term" data-t="dotArmorOnly">ticks only while the boss is armored</span> <span class="prov design">design</span></label>
+    </div>
+    <div class="warnbox">P2 debuff numbers are <b>open design items</b> (doc 04) — the main thing this sheet exists to tune, and the optimizer above solves for them. The debuff bypasses P3 <span class="term" data-t="fortress">Fortress</span> armor by design. It is modeled as <b>% of max HP</b>: the Fortress regen is 1% max HP/s, so a flat-damage debuff would flip from winning to losing depending on the HP budget — the counter has to scale the same way the threat does.</div>
+  </section>
+  </div>
+
+  <!-- =================== HERO TOTALS → SKILL DISTRIBUTION =================== -->
+  <section class="panel">
+    <h2><span class="term" data-t="dpsBudget">Hero DPS budget</span> → suggested <span class="term" data-t="distribution">skill distribution</span>
+      <span class="hint">— design the total, let the sheet hand you the per-skill numbers to fill in later</span></h2>
+    <div class="controls" style="margin-bottom:12px">
+      <label>Source
+        <select id="inBaseMode">
+          <option value="budget">Budget → derived bases (design the total)</option>
+          <option value="canon">Canon bases (doc 03 numbers)</option>
+        </select>
+      </label>
+      <label><span class="term" data-t="dpsBudget">Budget</span> <input type="number" id="inBudget" class="wide" min="10" max="2000" step="5" value="150" /> reference DPS for a <b>base-100</b> hero <span class="prov design">design</span></label>
+      <label><span class="term" data-t="paletteCount">Palette sub-skills</span> <input type="number" id="inPaletteN" class="tiny" min="3" max="8" step="1" value="5" /> <span class="prov doc">doc 03: 4–8</span></label>
+      <label>S2 CD <input type="number" id="inCd2" class="tiny" min="1" max="120" step="1" value="12" /> s</label>
+      <label>S3 CD <input type="number" id="inCd3" class="tiny" min="1" max="180" step="1" value="25" /> s</label>
+      <label>S4 CD <input type="number" id="inCd4" class="tiny" min="10" max="300" step="5" value="60" /> s</label>
+      <button id="btnResetSlots" class="mini">reset per-hero overrides</button>
+    </div>
+    <div>
+      <div>
+        <h2>The <span class="term" data-t="contract">role contract</span> <span class="hint">— doc 08: share of each role's output budget per slot, and the <span class="term" data-t="currency">currency</span> it pays in</span></h2>
+        <div class="tablewrap"><table id="mixTable">
+          <thead><tr>
+            <th>Slot</th><th>Key</th><th class="num">Casts/min</th><th class="num">Focus</th>
+            <th class="num">DPS</th><th class="num">Tank</th><th class="num">Healer</th><th class="num">Support / Control</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <div class="footnote" id="mixNote"></div>
+        <div class="controls" style="margin-top:8px">
+          <button id="btnRestoreContract" class="mini">restore doc 08 values</button>
+          <span class="footnote" style="margin:0">Cells are share % of that role's budget. Colour = currency: <span style="color:var(--series-2)">damage</span> · <span style="color:var(--good)">healing</span> · <span style="color:var(--series-4)">team buff</span>.</span>
+        </div>
+      </div>
+      <div style="margin-top:16px">
+        <h2>Per-hero skill budget <span class="hint">— the numbers to write into each kit</span></h2>
+        <div class="tablewrap"><table id="budgetTable">
+          <thead><tr>
+            <th>Hero</th><th>Role row</th><th class="num">Weight</th><th class="num">Budget</th>
+            <th class="num">S1</th><th class="num">S2</th><th class="num">S3</th>
+            <th class="num">S4 direct</th><th class="num">S4 /Mark</th><th class="num">S5</th>
+            <th class="num">Damage /s</th><th class="num">Healing /s</th>
+            <th class="num"><span class="term" data-t="canonDrift">Canon drift</span></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <div class="footnote">Each hero runs <b>their own role's</b> contract row, scaled by their weight (the base-damage ratio already in doc 03: DPS 100 · control/flex 85 · support 75 · tank 65 · healer 60). Numbers are colour-coded by currency — <span style="color:var(--good)">green is healing</span>, <span style="color:var(--series-4)">amber is team-buff value</span>. <b>Canon drift</b> compares the derived S1/S4 numbers with the doc-03 values where they exist; healers drift hardest because doc 03 gives their palette no damage at all.</div>
+      </div>
+    </div>
+    <details style="margin-top:10px">
+      <summary>Per-hero slot detail (per-cast damage, ceilings, overrides)</summary>
+      <div class="panelbody">
+        <div class="slotgrid" id="slotGrid"></div>
+        <div class="footnote">Per-cast damage is shown at the <b>current</b> board (steady Marks + Amp + Gear + Format + buffs) and at the <span class="term" data-t="ceiling">ceiling</span> (payoff beat, 10 Marks, 50% Amp, BiS, match). Casts/min comes from the <span class="term" data-t="rotation">rotation model</span>: every cast costs one <span class="term" data-t="gcd">GCD</span>, and basics fill whatever GCDs the other four slots leave free. Numbers you type here are per-hero overrides, they win over the budget, and they travel in the export.</div>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============================ RESULTS ============================ -->
+  <section class="panel">
+    <h2>Simulation results <span class="hint">— deterministic 100 ms tick, phases loop until kill or enrage · <span id="simDiffLabel"></span></span></h2>
+    <div class="tiles" id="tiles"></div>
+
+    <h2 style="margin-top:18px">Boss HP over time</h2>
+    <div class="chartwrap" id="chartwrap">
+      <svg id="chart" viewBox="0 0 960 300" role="img" aria-label="Boss HP percentage over fight time with phase bands"></svg>
+      <div id="tooltip"></div>
+    </div>
+
+    <h2 style="margin-top:18px">Damage by slot</h2>
+    <div class="stack" id="stack"></div>
+    <div class="legend" id="stackLegend"></div>
+
+    <h2 style="margin-top:18px">Boss HP by team size <span class="hint">— each row is a full re-simulation with that many players, i.e. candidate <code>hpByTeamSize</code> values (open issue P-2)</span></h2>
+    <table id="sizeTable">
+      <thead><tr><th>Team size</th><th class="num">Team DPS</th><th class="num">Boss HP for target kill</th><th class="num">HP per player</th><th>Comp</th></tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <h2 style="margin-top:18px">Per-phase ledger <span class="hint">— totals across the whole fight per phase type</span></h2>
+    <div class="tablewrap"><table id="phaseOut">
+      <thead><tr>
+        <th>Phase</th><th class="num">Active s</th><th class="num">Team dmg dealt</th><th class="num">Boss regen</th>
+        <th class="num">Incoming</th>
+        <th class="num"><span class="term" data-t="hps">Req. HPS</span></th>
+        <th class="num">Net HP/s</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+
+    <details>
+      <summary>Simulation data table (chart accessibility view)</summary>
+      <div class="panelbody" style="max-height:260px;overflow:auto">
+        <table id="simTable"><thead><tr><th>t</th><th>Phase</th><th class="num">Boss HP %</th><th class="num">Marks</th><th class="num">Team DPS</th></tr></thead><tbody></tbody></table>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============================ REFERENCE ============================ -->
+  <details>
+    <summary>Hero roster reference (all 14 — extracted numbers &amp; provenance)</summary>
+    <div class="panelbody" style="overflow-x:auto"><table id="rosterTable">
+      <thead><tr><th>Hero</th><th>Role</th><th>Kit</th><th class="num">S5 base</th><th>S1 (1–x)</th><th class="num">S1 dmg</th><th>S2 (E)</th><th>S3 (R)</th><th>S4 (F)</th><th class="num">/Mark</th><th>Prov</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="footnote">Only Freud has coded cooldowns (12 / 25 / 60 s — scaffold by its own comment). All other CDs mirror his. S2/S3 damage exists in doc 03 only for the chain kits (Skinner <i>Consequence</i> 175, Pavlov <i>UCS</i> 145 / <i>NS</i> 20); every other S2/S3 number here is a <span class="prov design">design</span> proposal from the coefficient knobs. <b>No hero HP and no healing throughput numbers exist anywhere in the repo</b> — both are blocking gaps for survival math (Req. HPS is demand only).</div>
+    </div>
+  </details>
+
+  <details>
+    <summary>Glossary — every term in plain language</summary>
+    <div class="panelbody"><div id="glossaryBody"></div></div>
+  </details>
+
+  <details>
+    <summary>Canon constants &amp; known design gaps</summary>
+    <div class="panelbody">
+      <table>
+        <tbody>
+          <tr><td>Mark bonus</td><td class="num">+6% / stack, cap 10</td><td><span class="prov code">code</span></td>
+              <td>Payoff-beat skill bonus</td><td class="num">+25%</td><td><span class="prov code">code</span> (only under P-1 = off)</td></tr>
+          <tr><td>Mark duration</td><td class="num">20 s</td><td><span class="prov doc">doc</span></td>
+              <td>Cross-consumption</td><td class="num">+50% / foreign Mark</td><td><span class="prov code">code</span></td></tr>
+          <tr><td>Amp cap</td><td class="num">50%</td><td><span class="prov code">code</span></td>
+              <td>Overheal → Amp</td><td class="num">1000 = +1% (5 s)</td><td><span class="prov code">code</span></td></tr>
+          <tr><td>Gear cap (12% Rule)</td><td class="num">×1.12</td><td><span class="prov code">code</span></td>
+              <td>Crit effect</td><td class="num">175%</td><td><span class="prov doc">doc</span> (not modeled)</td></tr>
+          <tr><td>Fixation (wrong cast)</td><td class="num">lock 10 s, −30% dmg 6 s</td><td><span class="prov doc">doc</span></td>
+              <td>Repression (unanswered)</td><td class="num">boss +5% dmg / stack</td><td><span class="prov doc">doc</span> (not modeled)</td></tr>
+          <tr><td>GCD / beat</td><td class="num">1.5 s</td><td><span class="prov code">code</span></td>
+              <td>Max Marks / ult</td><td class="num">6 (Freud code; doc 07 suggests 5)</td><td><span class="prov code">code</span></td></tr>
+          <tr><td>Team size</td><td class="num">3–5, 3 to queue</td><td><span class="prov doc">doc 00/01</span></td>
+              <td>Focus costs (Freud)</td><td class="num">8 / 20 / 30 / 50</td><td><span class="prov code">code</span> (palette 8 = scaffold)</td></tr>
+        </tbody>
+      </table>
+      <div class="warnbox" style="margin-top:12px"><b>Gaps that block real tuning</b> (docs/07-open-design-issues.md):
+        <b>P-1</b> Beat-vs-skill contradiction — toggle above swings every off-beat skill cast by up to 47%.
+        <b>P-2</b> Boss HP by team size specified nowhere (<code>hpByTeamSize</code> is a required field with no values) — the by-team-size table above produces candidate values.
+        <b>P-3</b> One 10-Mark pool vs several consuming ults — the "ult fires at N" and "Marks per ult" knobs are that debate.
+        <b>P-4</b> "≥3 allies" gates are unclearable at the 3-player minimum.
+        <b>S-1</b> Amp pins its cap — hence the steady-state slider.
+        Plus: no hero HP, no healer HPS, and no per-skill Focus/CD tuning table in canon — the S2/S3/S4 numbers here are this sheet's proposal for that table.
+      </div>
+    </div>
+  </details>
+
+  <details id="exportPreview">
+    <summary>Export preview (what "Export JSON" writes)</summary>
+    <div class="panelbody"><pre class="json" id="jsonPreview"></pre></div>
+  </details>
+
+</main>
+<div id="bubble" role="tooltip"><div class="btitle"></div><div class="bbody"></div><div class="bmath"></div></div>
+<script>
+"use strict";
+/* =========================== EXTRACTED GAME DATA ===========================
+   Mirrors admin/boss-math/extracted-stats.json. prov: code | doc | design. */
+const C = {
+  markBonus: 0.06, maxMarks: 10, markDurS: 20,
+  maxAmp: 0.5, maxGear: 1.12, crossBonus: 0.5, payoffBonus: 0.25,
+  maxMitigation: 0.40,   // doc 08 §1.1 — skills only, additive, hard cap
+  overhealPerAmpPercent: 1000, // doc 02: 1000 overheal = +1% Amp, for 5 s
+  overhealAmpWindowS: 5,
+  format: { solo: 0.8, match: 1.0 },
+  beats: [0.8, 1.0, 1.5], avgBeat: (0.8 + 1.0 + 1.5) / 3,
+  gcdS: 1.5,
+  fixation: { lockS: 10, pen: 0.30, penS: 6 },
+  minTeamSize: 3, maxTeamSize: 5,
+  ampRampS: 15,          // design: seconds for healers to reach steady Amp
+  focusCost: { s1: 8, s2: 20, s3: 30, s4: 50, s5: 0 }, // Freud code (palette 8 = scaffold)
+};
+/* Optimizer targets. Everything the "Optimized suggestions" panel solves against. */
+const TARGET = {
+  mix: { s1: 0.40, er: 0.15, s4: 0.20, s5: 0.25 },
+  mixTol: 0.05,
+  fortressNetPctPerS: -0.30,   // P3 should drain 0.3% of max HP per second
+  killFracOfEnrage: 0.80,      // kill at 80% of the enrage timer
+};
+
+/* Heroes. s1/s2/s3 damage carry their own provenance: doc numbers where doc 03
+   states one, otherwise null → derived from the coefficient knobs. */
+const HEROES = [
+  { id:"freud", name:"Freud", role:"dps", kit:"palette", base:100, prov:"code",
+    s1:{ name:"Psychosexual Stages (5)", dmg:180, prov:"doc" },
+    s2:{ name:"Defense Mechanism", dmg:null, prov:"design" },
+    s3:{ name:"Free Association", dmg:null, prov:"design" },
+    s4:{ name:"Dream Analysis", perMark:200, prov:"code" } },
+  { id:"kohlberg", name:"Kohlberg", role:"dps", kit:"palette", base:100, prov:"doc",
+    s1:{ name:"Moral Judgment (6)", dmg:165, prov:"doc" },
+    s2:{ name:"Heinz Dilemma", dmg:null, prov:"design" },
+    s3:{ name:"Social Contract", dmg:null, prov:"design" },
+    s4:{ name:"Universal Ethical Principles", perMark:220, bypass:true, prov:"doc" } },
+  { id:"skinner", name:"Skinner", role:"dps", kit:"chain", base:100, prov:"doc",
+    s1:{ name:"Open Chamber (opener)", dmg:0, prov:"doc" },
+    s2:{ name:"Consequence (4 quadrants)", dmg:175, prov:"doc" },
+    s3:{ name:"Schedule", dmg:null, prov:"design" },
+    s4:{ name:"Skinner Box", perMark:160, prov:"doc" } },
+  // ★ 2026-08-03: Control/85 → TANK/65, and shipped (shared/heroes/pavlov.ts),
+  // so these are "code" not "doc". Two departures the per-role rows above
+  // cannot express, both documented in doc 08 §4.4: s2 and s3 SWAP shares
+  // (E carries 15% as a team heal, R carries 5% damage — E+R = 20% either
+  // way), and s1's share is spent lumpy across UCS 93 + CS 298 at a 3:1
+  // cadence, so its per-cast figure below is the blended one the row expects.
+  { id:"pavlov", name:"Pavlov", role:"tank", kit:"chain", base:65, prov:"code",
+    s1:{ name:"UCS 93 → CS 298 (3:1)", dmg:144, prov:"code" },
+    s2:{ name:"Spontaneous Recovery (team heal 93)", dmg:0, prov:"code" },
+    s3:{ name:"Generalization", dmg:64, prov:"code" },
+    s4:{ name:"Extinction", perMark:52, prov:"code" } },
+  { id:"bandura", name:"Bandura", role:"flex", kit:"palette", base:85, prov:"doc", borrow:0.8,
+    s1:{ name:"Observational (borrows ×0.8)", dmg:null, prov:"doc" },
+    s2:{ name:"Bobo Doll", dmg:null, prov:"design" },
+    s3:{ name:"Self-Efficacy", dmg:null, prov:"design" },
+    s4:{ name:"Reciprocal Determinism", perMark:130, prov:"doc" } },
+  { id:"erikson", name:"Erikson", role:"support", kit:"palette", base:75, prov:"doc",
+    s1:{ name:"Resolve Crisis (8)", dmg:140, prov:"doc" },
+    s2:{ name:"Moratorium", dmg:null, prov:"design" },
+    s3:{ name:"Generativity", dmg:null, prov:"design" },
+    s4:{ name:"Life Review", perMark:150, prov:"doc" } },
+  { id:"bronfenbrenner", name:"Bronfenbrenner", role:"support", kit:"palette", base:75, prov:"doc",
+    s1:{ name:"Systems (5)", dmg:130, prov:"doc" },
+    s2:{ name:"Exosystem Buffer", dmg:null, prov:"design" },
+    s3:{ name:"Mesosystem Link", dmg:null, prov:"design" },
+    s4:{ name:"Chronosystem (utility)", perMark:0, prov:"doc" } },
+  { id:"vygotsky", name:"Vygotsky", role:"support", kit:"palette", base:75, prov:"doc",
+    s1:{ name:"Scaffolding (4)", dmg:120, prov:"doc" },
+    s2:{ name:"Cultural Tools", dmg:null, prov:"design" },
+    s3:{ name:"Private Speech", dmg:null, prov:"design" },
+    s4:{ name:"Collective Mind (utility)", perMark:0, prov:"doc" } },
+  { id:"piaget", name:"Piaget", role:"tank", kit:"palette", base:65, prov:"doc",
+    s1:{ name:"Cognitive Stages (4)", dmg:150, prov:"doc" },
+    s2:{ name:"Schema Shield", dmg:null, prov:"design" },
+    s3:{ name:"Object Permanence", dmg:null, prov:"design" },
+    s4:{ name:"Equilibration", perMark:170, prov:"doc" } },
+  { id:"ainsworth", name:"Ainsworth", role:"tank", kit:"palette", base:65, prov:"doc",
+    s1:{ name:"Attachment Styles (4)", dmg:135, prov:"doc" },
+    s2:{ name:"Safe Haven", dmg:null, prov:"design" },
+    s3:{ name:"Attachment Tether", dmg:null, prov:"design" },
+    s4:{ name:"Earned Security", perMark:145, prov:"doc" } },
+  { id:"maslow", name:"Maslow", role:"healer", kit:"palette", base:60, prov:"doc",
+    s1:{ name:"Hierarchy (5, heals)", dmg:0, prov:"doc" },
+    s2:{ name:"Safety Needs", dmg:null, prov:"design" },
+    s3:{ name:"Belonging", dmg:null, prov:"design" },
+    s4:{ name:"Peak Experience", perMark:140, prov:"doc" } },
+  { id:"seligman", name:"Seligman", role:"healer", kit:"palette", base:60, prov:"doc",
+    s1:{ name:"PERMA (5, heals)", dmg:0, prov:"doc" },
+    s2:{ name:"Learned Optimism", dmg:null, prov:"design" },
+    s3:{ name:"Signature Strengths", dmg:null, prov:"design" },
+    s4:{ name:"Flourishing", perMark:145, prov:"doc" } },
+  { id:"csikszentmihalyi", name:"Csikszentmihalyi", role:"healer", kit:"palette", base:60, prov:"doc",
+    s1:{ name:"Flow Channel (3, heals)", dmg:0, prov:"doc" },
+    s2:{ name:"Clear Goals", dmg:null, prov:"design" },
+    s3:{ name:"Merging of Action & Awareness", dmg:null, prov:"design" },
+    s4:{ name:"Autotelic Experience", perMark:150, prov:"doc" } },
+  { id:"beck", name:"Beck", role:"healer", kit:"palette", base:60, prov:"doc",
+    s1:{ name:"Cognitive Restructuring (6, heals)", dmg:0, prov:"doc" },
+    s2:{ name:"Thought Record", dmg:null, prov:"design" },
+    s3:{ name:"Socratic Question", dmg:null, prov:"design" },
+    s4:{ name:"Triad Collapse", perMark:150, prov:"doc" } },
+];
+/* ===================== DIFFICULTIES & TUNING CORNERS =====================
+   Every boss ships in three difficulties. A difficulty is NOT a separate fight:
+   same phase script, different HP curve, outgoing damage, self-heal and answer
+   window. Each one is tuned against one of the four corners below, and the
+   matrix then reports what the other three corners experience. prov: design —
+   doc 04 has no difficulty tiers yet, this is the sheet's proposal. */
+const CORNERS = [
+  { id: "3ng", team: 3, gear: 1.00, label: "3-man · no gear" },
+  { id: "3fg", team: 3, gear: 1.12, label: "3-man · full gear" },
+  { id: "5ng", team: 5, gear: 1.00, label: "5-man · no gear" },
+  { id: "5fg", team: 5, gear: 1.12, label: "5-man · full gear" },
+];
+/**
+ * killFrac is the tier's real gate. Because gear is capped at +12% (the 12%
+ * Rule), a fully geared team only kills ~11% faster than a fresh one — so a
+ * tier can only lock out an under-geared group by putting its target kill time
+ * within that 11% of the enrage timer. Everything else (damage, regen, window)
+ * changes how the fight FEELS, not who can finish it.
+ */
+const DEFAULT_DIFFICULTIES = [
+  { id: "standard",  name: "Standard",  ref: "3ng", killFrac: 0.65, dmgMult: 1.00, regenMult: 1.00, windowMult: 1.00 },
+  { id: "hard",      name: "Hard",      ref: "3fg", killFrac: 0.84, dmgMult: 1.45, regenMult: 1.20, windowMult: 0.90 },
+  { id: "nightmare", name: "Nightmare", ref: "5fg", killFrac: 0.94, dmgMult: 2.10, regenMult: 1.50, windowMult: 0.80 },
+];
+/* ======================= THE ROLE CONTRACT (doc 08) =======================
+   Four role groups, five slots each. `mix` shares sum to 100% of the hero's
+   OUTPUT budget; `currency` splits each slot's share between damage, healing and
+   team buff value. Mitigation is specified separately — it is not fungible with
+   damage at a fixed rate, because its worth depends on what the boss hits for.
+   prov: doc 08-role-contract.md (design call 2026-08-01). */
+const ROLE_GROUP = { dps:"dps", tank:"tank", healer:"healer", support:"support", control:"support", flex:"support" };
+const CONTRACT = {
+  dps: {
+    label: "DPS",
+    mix: { 1:0.40, 2:0.09, 3:0.06, 4:0.20, 5:0.25 },
+    currency: { 1:{dmg:1}, 2:{heal:1}, 3:{dmg:1}, 4:{dmg:1}, 5:{dmg:1} },
+    mitigation: [{ slot:2, mag:0.20, durS:6, target:"self" }],
+  },
+  tank: {
+    label: "Tank",
+    mix: { 1:0.35, 2:0.05, 3:0.15, 4:0.20, 5:0.25 },
+    currency: { 1:{dmg:1}, 2:{dmg:1}, 3:{heal:1}, 4:{dmg:0.75, heal:0.25}, 5:{dmg:1} },
+    mitigation: [{ slot:1, mag:0.10, durS:4, target:"team" }, { slot:2, mag:0.25, durS:6, target:"team" }],
+  },
+  healer: {
+    label: "Healer",
+    mix: { 1:0.15, 2:0.15, 3:0.20, 4:0.30, 5:0.20 },
+    currency: { 1:{dmg:1/3, buff:2/3}, 2:{heal:1}, 3:{heal:1}, 4:{heal:1}, 5:{dmg:1} },
+    mitigation: [],
+  },
+  support: {
+    label: "Support / Control",
+    mix: { 1:0.35, 2:0.05, 3:0.10, 4:0.25, 5:0.25 },
+    currency: { 1:{dmg:1}, 2:{dmg:1}, 3:{buff:1}, 4:{dmg:1}, 5:{dmg:1} },
+    mitigation: [{ slot:2, mag:0.15, durS:5, target:"team" }],
+  },
+};
+const ROLE_GROUPS = ["dps", "tank", "healer", "support"];
+const CURRENCY_COLOR = { dmg:"var(--series-2)", heal:"var(--good)", buff:"var(--series-4)" };
+
+const SLOT_META = [
+  { n:1, key:"1–x", kind:"palette",  label:"S1 Palette" },
+  { n:2, key:"E",   kind:"defense",  label:"S2 Defense" },
+  { n:3, key:"R",   kind:"chain",    label:"S3 Chain" },
+  { n:4, key:"F",   kind:"ultimate", label:"S4 Ultimate" },
+  { n:5, key:"LMB", kind:"basic",    label:"S5 Basic" },
+];
+const SLOT_COLOR = { 1:"var(--series-2)", 2:"var(--series-3)", 3:"var(--series-4)", 4:"var(--series-5)", 5:"var(--series-1)", debuff:"var(--series-6)" };
+
+const BOSSES = {
+  nightmare: {
+    name: "NIGHTMARE", enrage: 480, killTarget: 384,
+    phases: [
+      { name:"P1 Onslaught",  dur:60, taken:1.00, regen:0,    hit:100, per:2, aoe:false },
+      // P2/P3 outgoing damage per the 2026-08-01 boss pass. The hit sizes are
+      // the design call; the cadences are this sheet's assumption — P2 keeps
+      // pressure on while the team answers five stages, P3 chips at the tank
+      // through the armored phase. Both are editable in the phase table.
+      // P3 regen retuned 0.01 → 0.003 (2026-08-01 Standard pass): at 1%/s the
+      // boss healed back 60% of max HP per pass, which made the P2 debuff 58%
+      // of all damage in the fight and turned Standard into a hidden pass/fail
+      // wall — a team landing <55% of P2 stages could never win. At 0.3%/s
+      // (18% per pass) the Fortress still demands the debuff but P2 failure
+      // degrades gracefully instead of enrage-locking. Doc 04 leaves the regen
+      // TBD in gameplay terms; nothing in shared/ or src/ implements it yet.
+      { name:"P2 Shapeshift", dur:30, taken:1.00, regen:0,     hit:30,  per:3, aoe:true, skillCheck:true },
+      { name:"P3 Fortress",   dur:60, taken:0.10, regen:0.003, hit:20,  per:2, aoe:false },
+      { name:"P4 Terror",     dur:60, taken:1.00, regen:0,    hit:50,  per:5, aoe:true },
+    ],
+  },
+  regressor: {
+    name: "THE REGRESSOR", enrage: 480, killTarget: 384,
+    phases: [1,2,3,4,5].map(i => ({ name:`Age phase ${i}`, dur:45, taken:1.0, regen:0, hit:80, per:3, aoe:false })),
+  },
+};
+
+/* ============================== GLOSSARY ==============================
+   Layman explanations. `plain` is the bubble body, `math` the numeric note. */
+const GLOSSARY = {
+  pipeline: { t:"The one damage pipeline", plain:"Every hit in the game — damage, healing, shields — is the same one-line multiplication. Nothing has its own private formula.", math:"Hit = Base × Beat × (1 + 0.06×Marks) × (1+Amp) × Gear × Format" },
+  base: { t:"Base", plain:"The flat number printed on a skill. It never changes with gear or level — only the multipliers around it do.", math:"e.g. Freud's palette cast is 180 before anything else touches it." },
+  beat: { t:"Beat (the 3-beat cycle)", plain:"Your basic attack rotates through three rhythm steps — weak, normal, strong. The strong one is the payoff beat. Landing your big buttons on it is the game's main timing skill.", math:"×0.8 → ×1.0 → ×1.5, looping. Freud switches his manually with Tab." },
+  payoff: { t:"Payoff beat %", plain:"How often this player actually lands skills on the strong beat. A good player hits it most of the time; a distracted one rarely does.", math:"Drives the Beat term (or the flat +25%, depending on the P-1 switch)." },
+  mark: { t:"Marks", plain:"Little debuff stickers the team puts on the boss by answering its phases correctly. Each one makes the boss take more damage from everybody, and ultimates eat them for a big hit.", math:"+6% damage taken each, max 10 on the board, 20 s each." },
+  crossConsumption: { t:"Cross-consumption", plain:"Your ultimate is worth 50% more per Mark when it eats somebody else's Marks instead of your own. This is the one rule that makes team-ups matter.", math:"foreign Mark value = ×1.5" },
+  foreign: { t:"Foreign %", plain:"Of the Marks this hero's ultimate eats, how many belong to teammates. Higher is better — teammates' Marks pay 50% more.", math:"100% foreign = every consumed Mark at ×1.5" },
+  amp: { t:"Amp (amplification)", plain:"A team-wide damage boost fed by support buffs and by healing that was wasted (overheal). A healer with nobody to heal is still adding damage.", math:"0–50%. 1000 overheal = +1% Amp for 5 s." },
+  gear: { t:"Gear (the 12% Rule)", plain:"Full best-in-slot gear is worth only +12% total, on purpose. Reading the boss correctly is worth about 3×. Skill beats shopping.", math:"×1.00 → ×1.12" },
+  format: { t:"Format", plain:"Playing alone as one team is worth 80%; a proper two-team match is worth 100%. Same fight, different scoring weight.", math:"solo ×0.8 · match ×1.0" },
+  focus: { t:"Focus", plain:"The universal skill resource — everyone's 'mana'. It refills during the fight. If your rotation spends more than it regenerates, you eventually stop casting.", math:"Freud's costs: palette 8, E 20, R 30, F 50. Regen has no canon value yet." },
+  gcd: { t:"GCD (global cooldown)", plain:"After any cast you wait a beat before the next one. It caps how many buttons you can press per second, so cooldowns compete for the same time.", math:"1.5 s per cast → about 40 casts a minute, total, per hero." },
+  uptime: { t:"Uptime %", plain:"How much of the fight this player is actually attacking rather than running from mechanics, dead, or repositioning.", math:"Multiplies everything that hero does." },
+  acc: { t:"Accuracy %", plain:"How often the player picks the right answer for the boss's current phase. Wrong answers deal no damage, give no Mark, and self-punish.", math:"Drives Mark generation and the Fixation penalty." },
+  fixation: { t:"Fixation", plain:"The punishment for a wrong palette answer. That one sub-skill locks for 10 s and you personally deal 30% less damage for 6 s. The team is never punished for your mistake.", math:"lock 10 s · −30% damage 6 s" },
+  window: { t:"Palette window", plain:"How long you get to read the boss and answer before the phase moves on. Miss it and the boss gets an enrage stack instead.", math:"8 s base, widened by Clarity and Vygotsky's help." },
+  slot1: { t:"S1 — the palette (keys 1–x)", plain:"The wheel of 4–8 sub-skills. Pick the one that matches what the boss is doing right now. Right answer: damage plus a Mark. Wrong answer: Fixation.", math:"Cast rate is capped by the answer window, not by a cooldown." },
+  slot2: { t:"S2 — E, the defense", plain:"Your themed protective button. It also carries damage in this sheet so the slot isn't dead weight in the DPS math.", math:"Default cooldown 12 s (Freud's coded value)." },
+  slot3: { t:"S3 — R, the chain", plain:"The combo glue: it changes your next cast, stretches Marks, or hands power to a teammate.", math:"Default cooldown 25 s (Freud's coded value)." },
+  slot4: { t:"S4 — F, the ultimate", plain:"The payoff button. It eats the Marks the team stacked up and hits enormously — the biggest single number anyone produces.", math:"Damage = direct hit + per-Mark payload, with +50% per foreign Mark. 60 s cooldown." },
+  slot5: { t:"S5 — the basic attack (LMB)", plain:"Free filler damage with no cooldown and no resource cost. It rides the 3-beat cycle and fills whatever gaps your real buttons leave.", math:"One per 1.5 s GCD, averaging ×1.1 across the beat cycle." },
+  rotation: { t:"Rotation model", plain:"Every button press costs one global cooldown. This sheet gives the palette and cooldown skills first claim on that time, then lets basic attacks fill everything left over — which is what a real player does.", math:"basics/s = 1/1.5 − (palette + E + R + F casts per second)" },
+  ult: { t:"Ultimate", plain:"See S4. One team-wide Mark pool feeds every ultimate, so who cashes out and when is a real decision.", math:"" },
+  ultAt: { t:"Ult fires at N Marks", plain:"How patient your team is: do you cash out the moment the ultimate is ready, or wait until the board is stacked high?", math:"Higher N = bigger single hits, but ultimates sit idle waiting." },
+  maxConsumed: { t:"Marks per ultimate", plain:"How many Marks one ultimate is allowed to eat. Low numbers let several players cash out; high numbers mean one designated player takes everything.", math:"Freud's code says 6; doc 07 recommends starting at 5." },
+  dps: { t:"DPS", plain:"Damage per second — the sustained rate this hero or team puts out once the fight settles into a rhythm.", math:"" },
+  hps: { t:"Required HPS", plain:"How much healing per second the team needs just to break even against the boss's incoming damage during that phase.", math:"No healer throughput numbers exist in canon yet — this is demand only." },
+  ceiling: { t:"Ceiling hit", plain:"The best a single cast can possibly do: payoff beat, a full 10-Mark board, maxed Amp, full best-in-slot gear, in a real match.", math:"Base × 1.5 × 1.60 × 1.50 × 1.12" },
+  maxUlt: { t:"Max ultimate", plain:"The theoretical best ultimate: full Mark budget, every Mark borrowed from teammates, maxed Amp and gear.", math:"(direct + perMark × N × 1.5) × 1.5 × 1.12" },
+  enrage: { t:"Enrage timer", plain:"The hard deadline. Fail to kill the boss before it and the boss effectively wins.", math:"NIGHTMARE and Regressor: 8:00." },
+  deriveHp: { t:"Derive HP", plain:"Instead of guessing the boss's health, tell the sheet how long the fight should last and it searches for the health pool that produces exactly that.", math:"Binary search on total HP against the simulated kill time." },
+  teamSize: { t:"Team size (3 minimum)", plain:"You need at least 3 players to start a battle, and at most 5. A 3-player team has to kill the same boss on the same timer, so the boss's health must scale with headcount.", math:"3 / 4 / 5 — the hpByTeamSize curve the code requires." },
+  hpByTeamSize: { t:"hpByTeamSize", plain:"The boss's health written out per team size. The code demands this field and nobody has ever filled it in — this sheet computes candidates.", math:"Required in shared/types.ts; open issue P-2." },
+  taken: { t:"Damage taken multiplier", plain:"How much of your damage the boss actually feels during that phase. Armored phases soak most of it.", math:"P3 Fortress = 0.10, i.e. 90% blocked." },
+  regen: { t:"Boss regen", plain:"The boss healing itself, as a percentage of its full health every second. It scales with the health pool, so a bigger boss heals more per second too.", math:"P3 Fortress = 1% max HP/s." },
+  fortress: { t:"P3 Fortress", plain:"The armored phase. Normal damage barely scratches it and it heals itself — so the team must have set up the P2 debuff beforehand, which ignores the armor.", math:"10% damage taken, 1% max HP/s self-heal." },
+  skillCheck: { t:"P2 check success", plain:"The Shapeshift phase asks the team five questions. Getting them right is what applies the debuff that beats the armored phase that follows.", math:"5 stages per pass; each success grants one debuff stack." },
+  dot: { t:"Debuff DoT", plain:"Damage over time from the P2 debuff. It ignores the boss's armor, which is the whole point — it's the designed answer to the Fortress phase.", math:"Expressed as % of the boss's max HP per second, so it scales the same way the boss's self-heal does." },
+  dotArmorOnly: { t:"Debuff ticks only while armored", plain:"The debuff exists to crack the armored phase. If it also ticks through the unarmored phases it quietly becomes the team's main damage source and everybody's buttons stop mattering — which is what happens the moment you switch this off.", math:"On: the DoT only runs during phases with armor or self-heal. Off: it runs the whole fight (watch the damage-by-slot bar collapse)." },
+  aoe: { t:"AOE", plain:"The boss hits everybody at once instead of one player. Costs the team more total healing the bigger the team is.", math:"" },
+  p1: { t:"P-1 (open contradiction)", plain:"The design doc says two different things: that the rhythm multiplier applies to every hit, or that skills just get a flat +25% on the strong beat. Which one you pick swings off-beat casts by nearly half.", math:"ON = code default, reproduces the doc's 493 worked example. OFF = doc 07's recommendation." },
+  markSat: { t:"Mark saturation", plain:"How full the shared 10-Mark board is. When it's permanently full, extra Marks are wasted and ultimates start fighting each other for the same pool.", math:"Open issue P-3." },
+  prov: { t:"Provenance", plain:"Where a number came from: shipped code, a design doc, or this sheet proposing one because nobody has written it down yet.", math:"code · doc · design" },
+  difficulty: { t:"Difficulty", plain:"The same boss, offered three ways. Standard is the version anyone can walk into; Hard and Nightmare keep the identical phase script but give the boss more health, harder hits, faster self-healing and a shorter window to answer in.", math:"Standard / Hard / Nightmare — HP is derived per tier, the other three multipliers are knobs." },
+  corner: { t:"Tuning corner", plain:"One of the four honest combinations a team can show up as: three players or five, fresh gear or full best-in-slot. Tune a difficulty against one corner and the matrix tells you what the other three feel.", math:"3 or 5 players × gear ×1.00 or ×1.12" },
+  refCorner: { t:"Tuned for", plain:"The corner this difficulty is built around. Its health is derived so exactly that group kills the boss on schedule — weaker corners are meant to fall short, stronger ones to finish early.", math:"Standard → 3-man fresh · Hard → 3-man geared · Nightmare → 5-man geared" },
+  coverage: { t:"Coverage (uptime of a buff)", plain:"What fraction of the fight a buff is actually running. A cooldown that doubles your damage but is up a tenth of the time is a 10% buff, and the sheet only ever quotes you the honest half.", math:"effective = magnitude × coverage" },
+  atkBuff: { t:"Attack buff", plain:"Damage the team adds to itself with its own buttons — Power buffs, success stacks, empowerment handoffs. Separate from Amp, which is the support/overheal term already inside the formula.", math:"×(1 + magnitude × coverage), applied to every hero hit." },
+  defBuff: { t:"Defensive mitigation", plain:"Damage the team removes from itself with shields, damage reduction, redirects and absorbs. It doesn't make the boss die faster; it decides how much healing the fight demands.", math:"incoming ×(1 − magnitude × coverage)" },
+  dpsBudget: { t:"DPS budget", plain:"The one number you actually design: how much damage per second a full-DPS hero is worth. Everything else — each skill's damage, the ult's per-Mark value — is derived from it, so you can design totals now and specific skills later.", math:"Quoted at reference conditions: no Marks, no Amp, no gear, match format." },
+  heroHp: { t:"Hero HP", plain:"How big a health bar is. The design documents list HP as a stat and never say what it is worth, so this sheet works it out backwards from the boss: how hard it hits, how often, and how long someone has to survive that unaided.", math:"HP = max(worst incoming per second × time-to-live, biggest hit ÷ the no-one-shot fraction), then × the role's weight." },
+  ttl: { t:"Time to live", plain:"How many seconds a player at full health survives the worst thing the boss is doing, with nobody healing them. It is the healer's reaction window — set it to two seconds and healing becomes reflex, set it to twenty and nobody ever dies.", math:"HP ÷ incoming per second. Doc 02 then gives 20 s of bleed-out and a 3 s revive channel." },
+  oneShot: { t:"No one-shots", plain:"A cap on how much of a health bar one boss hit may remove. Without it, a fight can be perfectly survivable on average and still delete people out of nowhere, which reads as unfair rather than hard.", math:"biggest single hit ≤ this fraction of the squishiest hero's HP." },
+  contract: { t:"The role contract", plain:"What each of the five slots owes its role. A DPS's E is a defensive button, a healer's E is a small team heal, a tank's E protects everyone — same key, different job. Published in doc 08 so kits stop drifting one hero at a time.", math:"Four role rows × five slots; each row's shares sum to 100% of that hero's output budget." },
+  currency: { t:"Currency", plain:"What a slot's share is paid in: damage to the boss, healing to the team, or a buff the team uses. All three end up as boss health lost — healing keeps people casting, and healing that lands on a full-HP player turns into Amp.", math:"damage · healing · team buff. Mitigation is specified separately." },
+  mitigation: { t:"Mitigation", plain:"Damage the team simply never takes. It is not interchangeable with damage at a fixed rate, because what a 25% reduction is worth depends entirely on how hard the boss hits — which is why it is quoted on its own.", math:"taken = incoming × (1 − Mitigation). Skills only, additive, hard cap 0.40 (doc 08 §1.1)." },
+  kitMitigation: { t:"Mitigation from kits", plain:"Instead of guessing how protected a team is, the sheet reads it off the actual kits: each defensive cooldown's strength times how much of the time it can be up, and self-only buttons only cover the one player pressing them.", math:"Σ magnitude × (duration ÷ cooldown) × uptime × reach, then capped at 0.40." },
+  distribution: { t:"Skill distribution", plain:"How a hero's total damage is split across their buttons. The sheet holds the split fixed across the roster so every kit feels the same shape, and hands you the base damage each button needs to hit that split.", math:"share × total DPS ÷ casts per second = base damage" },
+  paletteCount: { t:"Palette sub-skills", plain:"How many alternatives sit on the wheel. They don't divide the damage — you only ever cast one — they divide the knowledge you need. More options means more theory to know and a lower realistic accuracy.", math:"doc 03 ships 4–8 per hero; the sheet charges an accuracy penalty per extra option." },
+  killFrac: { t:"Kill target (% of enrage)", plain:"How much of the timer the tier expects you to use. Standard leaves you a third of the clock spare; Nightmare expects you to be still killing it as the timer runs out — and that slack, not the boss's stats, is what actually locks weaker groups out.", math:"Full gear is +12% damage ≈ 11% faster, so a tier gates gear only above ~91% of enrage." },
+  gate: { t:"Gate", plain:"Whether the tier actually keeps out the groups below its tuning target. A tier everyone clears is the same tier wearing a different name.", math:"Holds when every corner weaker than the reference misses the enrage timer." },
+  canonDrift: { t:"Canon drift", plain:"How far the derived number sits from the one already written in the design docs. Small drift means your budget agrees with canon; large drift means one of the two has to give.", math:"derived ÷ doc-03 value − 1, on S1 and the ult's per-Mark value." },
+};
+
+const DEFAULT_TEAM = ["piaget", "seligman", "freud", "kohlberg", "pavlov"];
+
+/* =============================== STATE =============================== */
+const S = {
+  // gear defaults to the selected tier's reference corner (Standard → ×1.00).
+  // It used to default to ×1.12, which silently derived the live sim's HP with
+  // full BiS baked into the fresh-player tier — 70,500 vs the 62,500 the tier
+  // matrix derived for the same corner, and both landed in the export.
+  format: "match", beatRule: true, gear: 1.00, amp: 0.20,
+  windowS: 8, ultAt: 6, maxMarksConsumed: 6, focusRegen: 12,
+  teamSize: 3,
+  team: DEFAULT_TEAM.map(id => ({ id, acc: 0.8, payoff: 0.5, uptime: 0.95, foreign: 0.5 })),
+  difficulty: "standard",
+  difficulties: JSON.parse(JSON.stringify(DEFAULT_DIFFICULTIES)),
+  buffs: { atkMag: 0.15, atkCov: 0.60, defMag: 0.30, defCov: 0.50 },
+  baseMode: "budget",          // budget → derived bases | canon → doc 03 numbers
+  budgetDps: 95,               // reference DPS for a base-100 hero (≈ doc 03's own total)
+  paletteN: 5,                 // sub-skills on the wheel (doc 03: 4–8)
+  accPerExtraSubSkill: 0.03,   // design: accuracy cost of each option past 4
+  ultDirectShare: 0.30,        // design: how much of an ult is its direct hit
+  contract: JSON.parse(JSON.stringify(CONTRACT)),  // editable copy of doc 08
+  mixRole: "dps",              // which role row the distribution table is editing
+  useKitMitigation: true,      // mitigation from the team's own kits vs the slider
+  hpDesign: {                  // design inputs for deriving hero HP (nothing in canon)
+    ttlTargetS: 8,             // seconds an unhealed player must survive the worst stream
+    maxHitPct: 0.30,           // no single boss hit may exceed this share of a hero's HP
+    weights: { tank: 1.60, dps: 1.00, support: 1.05, healer: 0.90 },
+  },
+  coef: { s2: 0.75, s3: 1.25, s4: 3.0 },
+  cd: { s2: 12, s3: 25, s4: 60 },
+  slotOverrides: {},   // { heroId: { 1:{dmg,cd,focus}, 2:{...} } }
+  boss: "nightmare",
+  enrage: 480, killTarget: 312, hpMode: "derive", hp: 250000,
+  phases: JSON.parse(JSON.stringify(BOSSES.nightmare.phases)),
+  // dotPctPerStack retuned 0.35 → 0.15 alongside the P3 regen cut (see the
+  // phase table). The two only work as a pair: cutting regen alone re-derives
+  // HP to ~214k and pushes the debuff to 83% of all damage; keeping 0.35 at
+  // 1%/s regen kept it at 58%. At 0.3%/s + 0.15%/stack the Fortress nets
+  // −0.33% max HP/s (target −0.30) and the debuff carries 35% of the fight —
+  // under the 45% line where every other button stops mattering.
+  p2Success: 0.8, dotPctPerStack: 0.15, dotDurS: 105, dotArmorOnly: true,
+};
+
+/* =============================== MODEL =============================== */
+const fmtMult = () => C.format[S.format];
+const gearMult = () => Math.min(S.gear, C.maxGear);
+/** Team's own attack buffs — separate from Amp, discounted by their coverage. */
+const atkMult = () => 1 + S.buffs.atkMag * S.buffs.atkCov;
+/**
+ * Defensive mitigation the team applies to itself. Either read off the kits
+ * (doc 08's per-role mitigation specs × their duty cycles) or entered by hand.
+ * Capped either way — doc 08 §1.1.
+ */
+function mitigationValue() {
+  if (!S.useKitMitigation) return Math.min(C.maxMitigation, S.buffs.defMag * S.buffs.defCov);
+  return kitMitigation(activeTeam()).capped;
+}
+const defMult = () => Math.max(0, 1 - mitigationValue());
+const pipeline = (marks, amp) =>
+  (1 + C.markBonus * Math.min(marks, C.maxMarks)) *
+  (1 + Math.min(amp, C.maxAmp)) * gearMult() * fmtMult() * atkMult();
+
+/** The difficulty currently being edited/simulated. */
+function diff() { return S.difficulties.find(d => d.id === S.difficulty) || S.difficulties[0]; }
+/** Harder tiers shrink the answer window — same script, less time to read it. */
+const effWindow = () => Math.max(1, S.windowS * diff().windowMult);
+/** Every extra option on the wheel is more theory to know, so accuracy slips. */
+const subSkillAccMult = () => Math.max(0.3, 1 - S.accPerExtraSubSkill * Math.max(0, S.paletteN - 4));
+const effAcc = slot => Math.min(1, slot.acc * subSkillAccMult());
+
+function heroDef(id) { return HEROES.find(h => h.id === id); }
+function activeTeam() { return S.team.slice(0, S.teamSize).filter(s => s.id); }
+function roleWeight(h) { return h.base / 100; }
+
+/**
+ * Budget mode — the designer sets one number per hero (total DPS) and the
+ * distribution hands back the base damage every slot needs to hit its share.
+ * Derived at a REFERENCE execution so the answer is a property of the kit, not
+ * of the player holding it: perfect accuracy, half the casts on the payoff beat,
+ * no Marks, no Amp, no gear, match format.
+ */
+const REF_EXEC = { acc: 1.0, payoff: 0.5, uptime: 1.0, foreign: 0.5 };
+function groupOf(h) { return ROLE_GROUP[h.role] || "support"; }
+function rowFor(group) { return S.contract[group] || S.contract.dps; }
+/** Normalised output-budget shares for one role row (damage + healing + buff). */
+function mixShares(group) {
+  const mix = rowFor(group).mix;
+  const sum = [1,2,3,4,5].reduce((a, n) => a + (mix[n] || 0), 0) || 1;
+  const out = { 1:0, 2:0, 3:0, 4:0, 5:0 };
+  for (const n of [1,2,3,4,5]) out[n] = (mix[n] || 0) / sum;
+  return out;
+}
+/** How one slot's share splits across the three currencies, normalised. */
+function currencyOf(group, n) {
+  const c = rowFor(group).currency[n] || { dmg: 1 };
+  const sum = (c.dmg || 0) + (c.heal || 0) + (c.buff || 0) || 1;
+  return { dmg: (c.dmg || 0) / sum, heal: (c.heal || 0) / sum, buff: (c.buff || 0) / sum };
+}
+/** Cast rates per second at the reference execution — the distribution's basis. */
+function refRates() {
+  const attempts1 = 1 / effWindow();
+  const r2 = 1 / S.cd.s2, r3 = 1 / S.cd.s3, r4 = 1 / S.cd.s4;
+  const basics = Math.max(0, 1 / C.gcdS - (attempts1 + r2 + r3 + r4));
+  return { 1: attempts1 * REF_EXEC.acc, 2: r2, 3: r3, 4: r4, 5: basics, attempts1 };
+}
+/**
+ * Base values each slot needs, for one role at one weight. Returns damage and
+ * healing separately — the same derivation, different currency, because doc 02
+ * resolves a heal through the same pipeline as a hit.
+ */
+function budgetBases(weight, group) {
+  const target = S.budgetDps * weight;
+  const sh = mixShares(group), rate = refRates();
+  const sb = skillBeat(REF_EXEC.payoff);
+  const perCast = n => (rate[n] > 0 && sh[n] > 0)
+    ? target * sh[n] / (rate[n] * (n === 5 ? C.avgBeat : sb)) : 0;
+  const consumed = Math.min(S.maxMarksConsumed, Math.max(1, S.ultAt));
+  const markValue = consumed * (1 + C.crossBonus * REF_EXEC.foreign);
+  const out = { totalDps: target, dmg: {}, heal: {}, buff: {}, rateOf: rate, share: sh };
+  for (const n of [1,2,3,5]) {
+    const cur = currencyOf(group, n), v = perCast(n);
+    out.dmg[n] = v * cur.dmg; out.heal[n] = v * cur.heal; out.buff[n] = v * cur.buff;
+  }
+  // The ultimate splits into a direct hit and the Mark payload it cashes in —
+  // in whichever currency this role's F pays out.
+  const cur4 = currencyOf(group, 4);
+  const perCast4 = rate[4] > 0 ? target * sh[4] / rate[4] : 0;
+  out.dmg[4] = perCast4 * cur4.dmg * S.ultDirectShare;
+  out.heal[4] = perCast4 * cur4.heal * S.ultDirectShare;
+  out.buff[4] = perCast4 * cur4.buff * S.ultDirectShare;
+  const payload = perCast4 * (1 - S.ultDirectShare) / (markValue || 1);
+  out.perMark = payload * cur4.dmg;
+  out.perMarkHeal = payload * cur4.heal;
+  // Budget-equivalent output per second by currency, for the supply/demand check.
+  out.dpsDamage = [1,2,3,4,5].reduce((a, n) => a + target * sh[n] * currencyOf(group, n).dmg, 0);
+  out.hpsHealing = [1,2,3,4,5].reduce((a, n) => a + target * sh[n] * currencyOf(group, n).heal, 0);
+  out.buffValue = [1,2,3,4,5].reduce((a, n) => a + target * sh[n] * currencyOf(group, n).buff, 0);
+  return out;
+}
+/**
+ * Hero HP — derived, because canon has none.
+ *
+ * Doc 02 lists the HP stat and never gives it a value, which blocks every
+ * survival question in the game. Two constraints pin it down once the boss's
+ * outgoing damage exists:
+ *
+ *   1. TIME TO LIVE — an unhealed player facing the worst incoming stream must
+ *      last `ttlTargetS` seconds. That is the healer's reaction window.
+ *   2. NO ONE-SHOTS — the biggest single hit must sit under `maxHitPct` of the
+ *      squishiest hero's HP.
+ *
+ * The reference HP is sized against the worst stream ANY single target faces —
+ * so a taunt drop or a misdirect is survivable rather than instantly lethal —
+ * and role weights spread it from there. Nothing here feeds the damage sim; HP
+ * is an output of the fight's shape, not an input to it.
+ */
+function heroHpDesign() {
+  const mit = 1 - mitigationValue();
+  const team = Math.max(C.minTeamSize, activeTeam().length);
+  const D = diff();
+  let worstPerTarget = 0, worstAoe = 0, biggestHit = 0, worstPhase = "—";
+  for (const p of S.phases) {
+    if (!(p.per > 0) || !(p.hit > 0)) continue;
+    const hit = p.hit * D.dmgMult * mit;
+    const rate = hit / p.per;               // per second, on whoever is targeted
+    if (rate > worstPerTarget) { worstPerTarget = rate; worstPhase = p.name; }
+    if (p.aoe && rate > worstAoe) worstAoe = rate;
+    if (hit > biggestHit) biggestHit = hit;
+  }
+  const ttlHp = worstPerTarget * S.hpDesign.ttlTargetS;
+  const oneShotHp = S.hpDesign.maxHitPct > 0 ? biggestHit / S.hpDesign.maxHitPct : 0;
+  const refHp = Math.max(ttlHp, oneShotHp);
+  const round = v => Math.max(25, Math.round(v / 25) * 25);
+  const byGroup = {};
+  for (const g of ROLE_GROUPS) byGroup[g] = round(refHp * (S.hpDesign.weights[g] || 1));
+  return {
+    refHp, ttlHp, oneShotHp, byGroup, worstPerTarget, worstAoe, biggestHit, worstPhase,
+    mitigation: mitigationValue(), teamSize: team,
+    binding: oneShotHp > ttlHp ? "one-shot guard" : "time to live",
+  };
+}
+
+/** Team mitigation from the kits themselves: magnitude × duty cycle, capped. */
+function kitMitigation(team) {
+  const parts = [];
+  let total = 0;
+  for (const slot of team) {
+    const h = heroDef(slot.id); if (!h) continue;
+    const row = rowFor(groupOf(h));
+    const sl = slotsFor(slot);
+    const rot = rotation(slot);
+    for (const m of row.mitigation || []) {
+      const cd = (sl[m.slot - 1] || {}).cdS || S.cd["s" + m.slot] || 12;
+      // Duty cycle comes from how often the button is actually PRESSED, not from
+      // its cooldown: a palette rider fires once per answer window, not once per
+      // GCD, so quoting 4 s / 1.5 s would triple-count it.
+      const rate = rot ? rot.rates[m.slot] : (1 / cd) * slot.uptime;
+      const duty = Math.min(1, m.durS * rate);
+      // A self-only cooldown protects one player out of the team, so it removes
+      // that share of the raid's incoming rather than all of it.
+      const reach = m.target === "team" ? 1 : 1 / Math.max(1, team.length);
+      const value = m.mag * duty * reach;
+      total += value;
+      parts.push({ hero: h.name, slot: m.slot, mag: m.mag, durS: m.durS, cdS: cd, castsPerMin: rate * 60, duty, target: m.target, value });
+    }
+  }
+  return { parts, raw: total, capped: Math.min(total, C.maxMitigation) };
+}
+
+/**
+ * What doc 03's own numbers add up to, for a base-100 hero, at the same
+ * reference conditions the budget is quoted in. This is the anchor: set the
+ * budget here and the derived kits agree with canon's totals, whatever you then
+ * do with the split between slots.
+ */
+function canonReferenceDps() {
+  const rate = refRates(), sb = skillBeat(REF_EXEC.payoff);
+  const s1 = 180 * sb * rate[1];                     // Freud's palette, doc 03
+  const s5 = 100 * C.avgBeat * rate[5];              // base 100 basic, code
+  const consumed = Math.min(S.maxMarksConsumed, Math.max(1, S.ultAt));
+  const ult = 200 * consumed * (1 + C.crossBonus * REF_EXEC.foreign) * rate[4]; // 200/Mark, code
+  return { s1, s5, ult, total: s1 + s5 + ult };
+}
+
+/** Bandura has no palette of his own — he borrows the best one on the team. */
+function s1Base(slot) {
+  const h = heroDef(slot.id);
+  if (!h) return 0;
+  if (h.borrow) {
+    const best = Math.max(0, ...activeTeam().filter(s => s.id !== slot.id)
+      .map(s => {
+        const o = heroDef(s.id);
+        if (!o) return 0;
+        return S.baseMode === "budget" ? budgetBases(roleWeight(o), groupOf(o)).dmg[1] : (o.s1.dmg ?? 0);
+      }));
+    return best * h.borrow;
+  }
+  if (S.baseMode === "budget") return budgetBases(roleWeight(h), groupOf(h)).dmg[1];
+  return h.s1.dmg ?? 0;
+}
+
+/**
+ * Resolve all five slots for a hero. Budget mode derives every base from the
+ * DPS budget + distribution; canon mode uses the doc-03 numbers with the
+ * coefficient knobs filling the gaps. Per-hero overrides win over both.
+ */
+function slotsFor(slot) {
+  const h = heroDef(slot.id);
+  if (!h) return [];
+  const ov = S.slotOverrides[h.id] || {};
+  const one = s1Base(slot);
+  let def;
+  if (S.baseMode === "budget") {
+    const g = groupOf(h);
+    const bb = budgetBases(roleWeight(h), g);
+    // Bandura's borrowed palette replaces his own derived S1.
+    const s1 = h.borrow ? one : bb.dmg[1];
+    def = [
+      { n:1, base: s1,        heal: bb.heal[1], buff: bb.buff[1], cdS: C.gcdS,  focus: C.focusCost.s1, name: h.s1.name, prov: "design" },
+      { n:2, base: bb.dmg[2], heal: bb.heal[2], buff: bb.buff[2], cdS: S.cd.s2, focus: C.focusCost.s2, name: h.s2.name, prov: "design" },
+      { n:3, base: bb.dmg[3], heal: bb.heal[3], buff: bb.buff[3], cdS: S.cd.s3, focus: C.focusCost.s3, name: h.s3.name, prov: "design" },
+      { n:4, base: bb.dmg[4], heal: bb.heal[4], buff: bb.buff[4], perMark: bb.perMark, perMarkHeal: bb.perMarkHeal,
+        bypass: !!h.s4.bypass, cdS: S.cd.s4, focus: C.focusCost.s4, name: h.s4.name, prov: "design" },
+      { n:5, base: bb.dmg[5], heal: bb.heal[5], buff: bb.buff[5], cdS: C.gcdS, focus: C.focusCost.s5, name: "Basic attack", prov: "design" },
+    ];
+  } else {
+    // Coefficients are relative to the hero's damage identity: their palette
+    // number if they have one, else their basic-attack base (healers, chain
+    // openers), so nobody's E/R collapses to zero.
+    const ref = one > 0 ? one : h.base;
+    def = [
+      { n:1, base: one,                     cdS: C.gcdS,  focus: C.focusCost.s1, name: h.s1.name, prov: h.s1.prov },
+      { n:2, base: h.s2.dmg ?? ref * S.coef.s2, cdS: S.cd.s2, focus: C.focusCost.s2, name: h.s2.name, prov: h.s2.dmg != null ? h.s2.prov : "design" },
+      { n:3, base: h.s3.dmg ?? ref * S.coef.s3, cdS: S.cd.s3, focus: C.focusCost.s3, name: h.s3.name, prov: h.s3.dmg != null ? h.s3.prov : "design" },
+      { n:4, base: ref * S.coef.s4, perMark: h.s4.perMark, bypass: !!h.s4.bypass, cdS: S.cd.s4, focus: C.focusCost.s4, name: h.s4.name, prov: h.s4.prov },
+      { n:5, base: h.base, cdS: C.gcdS, focus: C.focusCost.s5, name: "Basic attack", prov: "code" },
+    ];
+  }
+  return def.map(d => {
+    const o = ov[d.n];
+    if (!o) return d;
+    const merged = Object.assign({}, d);
+    if (o.base != null) { merged.base = o.base; merged.prov = "design"; }
+    if (o.cdS != null) { merged.cdS = o.cdS; merged.prov = "design"; }
+    if (o.focus != null) merged.focus = o.focus;
+    if (o.perMark != null) { merged.perMark = o.perMark; merged.prov = "design"; }
+    return merged;
+  });
+}
+
+/** Beat multiplier a skill cast sees, given the P-1 toggle. */
+function skillBeat(payoffRate) {
+  return S.beatRule
+    ? payoffRate * 1.5 + (1 - payoffRate) * 0.9
+    : 1 + payoffRate * C.payoffBonus;
+}
+/** Fixation drag: each wrong palette cast costs −30% hero damage for 6 s. */
+function fixPenalty(slot) {
+  const h = heroDef(slot.id);
+  if (!h || h.kit !== "palette" || s1Base(slot) === 0) return 1;
+  return 1 - C.fixation.pen * Math.min(1, (1 - effAcc(slot)) * C.fixation.penS / effWindow());
+}
+
+/**
+ * Rotation: every cast costs one GCD. The palette answers on the boss's window,
+ * E/R/F answer on their cooldowns, and basic attacks fill whatever GCDs remain.
+ * Returns per-second cast rates and per-slot damage rates BEFORE the pipeline.
+ */
+function rotation(slot) {
+  const h = heroDef(slot.id), sl = slotsFor(slot);
+  if (!h) return null;
+  const up = slot.uptime;
+  const attempts1 = 1 / effWindow();            // every attempt burns a GCD
+  const hits1 = attempts1 * effAcc(slot);       // only correct ones deal damage
+  const r2 = 1 / sl[1].cdS, r3 = 1 / sl[2].cdS, r4 = 1 / sl[3].cdS;
+  const gcdBudget = 1 / C.gcdS;
+  const basics = Math.max(0, gcdBudget - (attempts1 + r2 + r3 + r4));
+  const pen = fixPenalty(slot);
+  const sb = skillBeat(slot.payoff);
+  const rates = {
+    1: hits1 * up, 2: r2 * up, 3: r3 * up, 4: r4 * up, 5: basics * up,
+  };
+  const dmg = {
+    1: sl[0].base * sb * rates[1] * pen,
+    2: sl[1].base * sb * rates[2] * pen,
+    3: sl[2].base * sb * rates[3] * pen,
+    4: 0, // ultimates resolve in the sim (Mark-gated), not as a flat rate
+    5: sl[4].base * C.avgBeat * rates[5] * pen,
+  };
+  const focusPerS =
+    attempts1 * up * sl[0].focus + rates[2] * sl[1].focus +
+    rates[3] * sl[2].focus + rates[4] * sl[3].focus + rates[5] * sl[4].focus;
+  // Healing supply. Same derivation as damage, different currency — it never
+  // touches boss HP directly; it pays the incoming bill and overheals into Amp.
+  const heal = {
+    1: (sl[0].heal || 0) * sb * rates[1],
+    2: (sl[1].heal || 0) * sb * rates[2],
+    3: (sl[2].heal || 0) * sb * rates[3],
+    4: 0, // the ult's healing resolves with its cast, below
+    5: (sl[4].heal || 0) * C.avgBeat * rates[5],
+  };
+  const ultHeal = ((sl[3].heal || 0) +
+    (sl[3].perMarkHeal || 0) * Math.min(S.maxMarksConsumed, Math.max(1, S.ultAt))) / sl[3].cdS * up;
+  const healPerS = heal[1] + heal[2] + heal[3] + heal[5] + ultHeal;
+  return { rates, dmg, heal, ultHeal, healPerS, markRate: rates[1], focusPerS, slots: sl, attempts1: attempts1 * up };
+}
+
+/** Ultimate: direct hit (scaled by the board it is cast into) + Mark payload. */
+function ultDamage(slot, marksAvail, amp) {
+  const sl = slotsFor(slot);
+  const u = sl[3];
+  if (!u) return { dmg: 0, consumed: 0 };
+  const budget = Math.min(S.maxMarksConsumed, Math.floor(marksAvail));
+  if (budget <= 0) return { dmg: 0, consumed: 0 };
+  const foreign = budget * slot.foreign, own = budget - foreign;
+  const payload = (u.perMark || 0) * (own + foreign * (1 + C.crossBonus));
+  const direct = u.base * (1 + C.markBonus * Math.min(marksAvail, C.maxMarks));
+  const dmg = (payload + direct) * (1 + Math.min(amp, C.maxAmp)) * gearMult() * fmtMult() * atkMult();
+  return { dmg, consumed: budget, bypass: !!u.bypass };
+}
+
+/* Theoretical ceilings (always match format — "maximum output"). */
+function ceilingCast(base) {
+  const beat = S.beatRule ? 1.5 : 1 + C.payoffBonus;
+  return base * beat * (1 + C.markBonus * C.maxMarks) * (1 + C.maxAmp) * C.maxGear * atkMult();
+}
+function ceilingBasic(base) {
+  return base * 1.5 * (1 + C.markBonus * C.maxMarks) * (1 + C.maxAmp) * C.maxGear * atkMult();
+}
+function maxUlt(slot) {
+  const u = slotsFor(slot)[3];
+  if (!u) return 0;
+  const payload = (u.perMark || 0) * S.maxMarksConsumed * (1 + C.crossBonus);
+  const direct = u.base * (1 + C.markBonus * C.maxMarks);
+  return (payload + direct) * (1 + C.maxAmp) * C.maxGear * atkMult();
+}
+
+/* ======================= SIMULATION (100 ms tick) ======================= */
+function simulate(hp) {
+  const dt = 0.1, team = activeTeam();
+  const D = diff(), mit = defMult();
+  const rots = team.map(rotation).filter(Boolean);
+  const totalMarkRate = rots.reduce((a, r) => a + r.markRate, 0);
+  const markCap = Math.min(C.maxMarks, totalMarkRate * C.markDurS);
+  const cycle = S.phases.reduce((a, p) => a + p.dur, 0);
+  const ults = team.map(s => slotsFor(s)[3].cdS); // readyAt — first cast after one CD
+  let marks = 0, bossHp = hp, t = 0;
+  let debuffs = [];
+  const src = { 1:0, 2:0, 3:0, 4:0, 5:0, debuff:0 };
+  const perPhase = S.phases.map(() => ({ dur: 0, dealt: 0, regen: 0, incoming: 0, rawIncoming: 0 }));
+  const samples = [];
+  let lastStageIx = -1, killTime = null, ultCasts = 0;
+
+  while (t < S.enrage) {
+    const tc = cycle > 0 ? t % cycle : 0;
+    let acc = 0, pIx = 0;
+    for (let i = 0; i < S.phases.length; i++) { acc += S.phases[i].dur; if (tc < acc) { pIx = i; break; } }
+    const ph = S.phases[pIx], led = perPhase[pIx];
+    const amp = Math.min(S.amp, C.maxAmp) * Math.min(1, t / C.ampRampS);
+    const pipe = pipeline(marks, amp);
+
+    // P2 skill-check stages grant armor-bypassing debuff stacks.
+    if (ph.skillCheck) {
+      const into = tc - (acc - ph.dur);
+      const stage = Math.min(4, Math.floor(into / (ph.dur / 5)));
+      const key = Math.floor(t / cycle) * 5 + stage;
+      if (key !== lastStageIx) { lastStageIx = key; debuffs.push({ w: S.p2Success, exp: t + S.dotDurS }); }
+    }
+    debuffs = debuffs.filter(d => d.exp > t);
+    const stacks = debuffs.reduce((a, d) => a + d.w, 0);
+
+    // Sustained damage, per slot
+    const tick = { 1:0, 2:0, 3:0, 5:0 };
+    for (const r of rots) for (const n of [1,2,3,5]) tick[n] += r.dmg[n] * pipe * dt * ph.taken;
+    // % max HP/s, bypasses armor. By default it only ticks on the phase it was
+    // designed to counter — an always-on %-max-HP DoT strong enough to beat the
+    // 1%/s Fortress regen drowns out every button in the game.
+    const armored = ph.taken < 1 || ph.regen > 0;
+    const debuffD = (S.dotArmorOnly && !armored) ? 0 : stacks * S.dotPctPerStack / 100 * hp * dt;
+
+    // Ultimates out of the shared Mark pool
+    let ultD = 0;
+    marks = Math.min(markCap, marks + totalMarkRate * dt);
+    const gate = Math.min(S.ultAt, Math.max(1, markCap));
+    for (let i = 0; i < team.length; i++) {
+      if (t >= ults[i] && marks >= gate) {
+        const u = ultDamage(team[i], marks, amp);
+        if (u.consumed > 0) {
+          ultD += u.dmg * (u.bypass ? 1 : ph.taken);
+          marks -= u.consumed;
+          ults[i] = t + slotsFor(team[i])[3].cdS;
+          ultCasts++;
+        }
+      }
+    }
+
+    const dealt = tick[1] + tick[2] + tick[3] + tick[5] + debuffD + ultD;
+    const afterDealt = bossHp - dealt;
+    const newHp = Math.min(hp, afterDealt + ph.regen * D.regenMult * hp * dt);
+    const regen = newHp - afterDealt;
+    bossHp = newHp;
+    src[1] += tick[1]; src[2] += tick[2]; src[3] += tick[3];
+    src[5] += tick[5]; src[4] += ultD; src.debuff += debuffD;
+    led.dur += dt; led.dealt += dealt; led.regen += regen;
+    // Incoming is what the team actually eats: boss damage scaled by difficulty,
+    // then reduced by the team's own mitigation × its coverage.
+    if (ph.per > 0) led.incoming += ph.hit * D.dmgMult * mit / ph.per * (ph.aoe ? team.length : 1) * dt;
+    if (ph.per > 0) led.rawIncoming += ph.hit * D.dmgMult / ph.per * (ph.aoe ? team.length : 1) * dt;
+
+    if (Math.round(t * 10) % 5 === 0) {
+      samples.push({ t, hp: Math.max(0, bossHp) / hp, phase: ph.name, dps: dealt / dt, marks });
+    }
+    if (bossHp <= 0) { killTime = t; break; }
+    t += dt;
+  }
+  samples.push({ t: killTime ?? S.enrage, hp: Math.max(0, bossHp) / hp, phase: "", dps: 0, marks });
+  return { hp, killTime, remaining: Math.max(0, bossHp) / hp, samples, src, perPhase, ultCasts };
+}
+
+function deriveHp() {
+  let lo = 1000, hi = 80_000_000;
+  const dies = h => { const r = simulate(h); return r.killTime !== null && r.killTime <= S.killTarget; };
+  // Degenerate guard: when %-max-HP damage (the P2 debuff) dominates, kill time
+  // stops depending on HP and no finite budget hits the target.
+  if (dies(hi)) return { hp: hi, degenerate: true };
+  if (!dies(lo)) return { hp: lo, degenerate: false };
+  for (let i = 0; i < 28; i++) {
+    const mid = (lo + hi) / 2;
+    if (dies(mid)) lo = mid; else hi = mid;
+  }
+  // Kill-time vs HP is not perfectly continuous (a regen window can cost a whole
+  // extra cycle), so round DOWN and re-verify — bounded, this is on a hot path.
+  let hp = Math.floor(lo / 500) * 500;
+  for (let i = 0; i < 20 && hp > 1000 && !dies(hp); i++) hp -= 500;
+  return { hp: Math.max(1000, hp), degenerate: false };
+}
+
+/** Run fn with a temporary patch on the shared state. */
+function withState(patch, fn) {
+  const keys = Object.keys(patch), saved = {};
+  for (const k of keys) saved[k] = S[k];
+  Object.assign(S, patch);
+  try { return fn(); } finally { Object.assign(S, saved); }
+}
+
+function steadyTeamDps() {
+  const team = activeTeam();
+  const rots = team.map(rotation).filter(Boolean);
+  const steadyMarks = Math.min(C.maxMarks, rots.reduce((a, r) => a + r.markRate, 0) * C.markDurS);
+  const pipe = pipeline(steadyMarks, S.amp);
+  let total = 0, healTotal = 0;
+  const per = team.map((s, i) => {
+    const r = rots[i];
+    const sustained = (r.dmg[1] + r.dmg[2] + r.dmg[3] + r.dmg[5]) * pipe;
+    const ultAvg = ultDamage(s, Math.min(S.ultAt, Math.max(1, steadyMarks)), S.amp).dmg / slotsFor(s)[3].cdS;
+    const dps = sustained + ultAvg;
+    // Healing rides the same pipeline (doc 02) minus the Mark term: Marks are a
+    // debuff on the boss, not a buff on the healer.
+    const healPipe = (1 + Math.min(S.amp, C.maxAmp)) * gearMult() * fmtMult() * atkMult();
+    const hps = r.healPerS * healPipe;
+    total += dps; healTotal += hps;
+    return { slot: s, rot: r, dps, sustained, ultAvg, hps };
+  });
+  return { per, total, healTotal, steadyMarks, pipe };
+}
+
+/* ===================== DIFFICULTY MATRIX =====================
+   For each difficulty: derive the HP curve at that tier's reference gear (for
+   both legal team sizes), then run all four corners against it. Corners weaker
+   than the tuning target are SUPPOSED to fall short — that is what a difficulty
+   tier means — so a wipe in the bottom-left of the matrix is a pass, not a bug. */
+function cornerDef(id) { return CORNERS.find(c => c.id === id) || CORNERS[0]; }
+/** Corners ordered weakest → strongest, so "does the gate hold" is a comparison. */
+const CORNER_ORDER = ["3ng", "3fg", "5ng", "5fg"];
+function difficultyMatrix() {
+  return S.difficulties.map(d => {
+    const ref = cornerDef(d.ref);
+    const target = S.enrage * d.killFrac;
+    const hpBySize = {};
+    // HP is derived per team size at the tier's own reference gear and target,
+    // so headcount never decides the outcome — gear and execution do. Size 4
+    // is derived too — it is a legal queue size and the serverPatch needs the
+    // full curve — but the corner cells only exercise the 3/5 extremes.
+    for (const n of [3, 4, 5]) {
+      if (S.team.slice(0, n).filter(s => s.id).length < n) { hpBySize[n] = null; continue; }
+      const r = withState({ difficulty: d.id, teamSize: n, gear: ref.gear, killTarget: target, hpMode: "derive" }, deriveHp);
+      hpBySize[n] = r.degenerate ? null : r.hp;
+    }
+    const cells = CORNERS.map(c => {
+      const hp = hpBySize[c.team];
+      if (hp == null) return { corner: c.id, ok: false, reason: "no HP" };
+      const res = withState({ difficulty: d.id, teamSize: c.team, gear: c.gear, hpMode: "fixed", hp },
+        () => simulate(hp));
+      const worstHps = Math.max(0, ...res.perPhase.map(l => l.dur > 0 ? l.incoming / l.dur : 0));
+      return {
+        corner: c.id, ok: true, hp, killTime: res.killTime,
+        remaining: res.remaining, isRef: c.id === d.ref, requiredHps: worstHps,
+        // "Weaker" means less GEAR, not fewer players: headcount is already
+        // neutralised by deriving a separate HP pool per team size, so a
+        // 3-stack and a 5-stack at the same gear are the same challenge.
+        weaker: c.gear < cornerDef(d.ref).gear,
+      };
+    });
+    const weakerCells = cells.filter(c => c.ok && c.weaker);
+    return {
+      id: d.id, name: d.name, ref: d.ref, killFrac: d.killFrac, targetS: target, hpBySize, cells,
+      // The gate holds when every corner below the tuning target falls short.
+      gateHolds: weakerCells.length > 0 && weakerCells.every(c => c.killTime === null),
+      weakerClearing: weakerCells.filter(c => c.killTime !== null).map(c => c.corner),
+    };
+  });
+}
+
+function fortressIndex() { return S.phases.findIndex(p => p.taken < 0.5 && p.regen > 0); }
+function fortressNet(res, hp) {
+  const i = fortressIndex();
+  if (i < 0) return null;
+  const l = res.perPhase[i];
+  if (!l || l.dur < 0.05) return null;
+  return (l.regen - l.dealt) / l.dur / hp * 100; // % max HP per second
+}
+
+/* ============================== OPTIMIZER ==============================
+   Every row: what the sheet currently uses, what it recommends, and why. */
+let matrixCache = null;
+function buildSuggestions(hp, res, dpsInfo) {
+  const out = [];
+  const add = (id, label, cur, sug, why, apply, changed) => out.push({ id, label, cur, sug, why, apply, changed });
+
+  // --- 1. Kill target vs enrage -----------------------------------------
+  // The live target belongs to the tier being edited, so the two never drift.
+  const tier = diff();
+  const targetKill = Math.round(S.enrage * tier.killFrac);
+  add("killTarget", "Target kill time", mmss(S.killTarget), mmss(targetKill),
+    `${tier.name} is set to kill at ${Math.round(tier.killFrac * 100)}% of the enrage timer, leaving ${Math.round((1 - tier.killFrac) * 100)}% as slack. Edit the tier's kill target in the difficulty table — this row only keeps the live sim in sync with it.`,
+    () => { S.killTarget = targetKill; },
+    Math.abs(targetKill - S.killTarget) > 3);
+
+  // --- 2. P2 debuff strength: solve so P3 actually drains ----------------
+  const netNow = fortressNet(res, hp);
+  if (netNow !== null) {
+    let lo = 0, hi = 5, best = S.dotPctPerStack;
+    const netAt = v => withState({ dotPctPerStack: v }, () => {
+      const r = simulate(hp); const n = fortressNet(r, hp);
+      // No Fortress time at all: either the boss died before reaching it (the
+      // target is more than met) or the phase does not exist (no signal).
+      if (n === null) return r.killTime !== null ? -Infinity : 0;
+      return n;
+    });
+    if (netAt(hi) < TARGET.fortressNetPctPerS) {
+      for (let i = 0; i < 22; i++) {
+        const mid = (lo + hi) / 2;
+        if (netAt(mid) > TARGET.fortressNetPctPerS) lo = mid; else hi = mid;
+      }
+      best = Math.round(hi * 20) / 20;
+    } else best = 5;
+    add("dot", "P2 debuff DoT / stack", S.dotPctPerStack.toFixed(2) + "% max HP/s", best.toFixed(2) + "% max HP/s",
+      `Fortress currently nets ${netNow >= 0 ? "+" : ""}${netNow.toFixed(2)}% max HP/s; the target is ${TARGET.fortressNetPctPerS.toFixed(2)}% so the armored phase is a real fight the team can win, not a stall.`,
+      () => { S.dotPctPerStack = best; },
+      Math.abs(best - S.dotPctPerStack) > 0.02);
+  }
+
+  // --- 3. Debuff duration: must survive the gap between P2 and P3 --------
+  const p2i = S.phases.findIndex(p => p.skillCheck), p3i = fortressIndex();
+  if (p2i >= 0 && p3i >= 0) {
+    const need = Math.ceil((S.phases[p2i].dur + S.phases[p3i].dur) * 1.15 / 5) * 5;
+    add("dotDur", "Debuff duration", S.dotDurS + " s", need + " s",
+      `Stacks applied in the first P2 stage must still be alive at the end of P3 (${S.phases[p2i].dur} s + ${S.phases[p3i].dur} s, +15% margin), or the counter expires before the phase it counters ends.`,
+      () => { S.dotDurS = need; },
+      need !== S.dotDurS);
+  }
+
+  // --- 3b. The Fortress regen budget ------------------------------------
+  // 1%/s over a 60 s phase means the boss heals 60% of its max HP every pass.
+  // Any counter big enough to beat that necessarily dwarfs the team's kits.
+  if (p3i >= 0) {
+    const ph3 = S.phases[p3i];
+    const perPass = ph3.regen * ph3.dur;                 // fraction of max HP healed per pass
+    const slotTot = [1,2,3,4,5].reduce((a, n) => a + res.src[n], 0);
+    const debuffShare = res.src.debuff / (slotTot + res.src.debuff || 1);
+    if (perPass > 0.25 || debuffShare > 0.45) {
+      const suggested = Math.round(0.20 / ph3.dur * 1000) / 1000; // heal 20% of max HP per pass
+      add("p3regen", "P3 Fortress regen", (ph3.regen * 100).toFixed(2) + "% /s → " + Math.round(perPass * 100) + "% max HP per pass",
+        (suggested * 100).toFixed(2) + "% /s → 20% per pass",
+        `The armored phase currently heals back ${Math.round(perPass * 100)}% of the boss's health every pass, so the debuff that counters it has to be ${(debuffShare * 100).toFixed(0)}% of all damage in the fight — every hero's buttons become rounding error. Three levers shrink it: cut the regen (this row), shorten the phase, or soften the ${Math.round((1 - ph3.taken) * 100)}% armor so hero kits still land during P3.`,
+        () => { S.phases[p3i].regen = suggested; S.boss = "custom"; },
+        Math.abs(suggested - ph3.regen) > 0.0005);
+    }
+  }
+
+  // --- 4. Ult cash-out threshold ---------------------------------------
+  let bestAt = S.ultAt, bestKill = Infinity;
+  for (let n = 1; n <= C.maxMarks; n++) {
+    const r = withState({ ultAt: n }, () => simulate(hp));
+    const k = r.killTime ?? (S.enrage + r.remaining * 1000);
+    if (k < bestKill - 0.05) { bestKill = k; bestAt = n; }
+  }
+  add("ultAt", "Ult fires at N Marks", S.ultAt, bestAt,
+    `Fastest kill across all 10 thresholds at this board saturation. Low N = frequent small cash-outs, high N = rarer, bigger ones.`,
+    () => { S.ultAt = bestAt; }, bestAt !== S.ultAt);
+
+  // --- 5. Marks per ultimate (P-3) -------------------------------------
+  let bestMax = S.maxMarksConsumed, bestMaxKill = Infinity;
+  for (let n = 3; n <= C.maxMarks; n++) {
+    const r = withState({ maxMarksConsumed: n }, () => simulate(hp));
+    const k = r.killTime ?? (S.enrage + r.remaining * 1000);
+    if (k < bestMaxKill - 0.05) { bestMaxKill = k; bestMax = n; }
+  }
+  add("maxConsumed", "Marks per ultimate (P-3)", S.maxMarksConsumed, bestMax,
+    `Fastest kill, and the number that decides how many players get to press F per stacking window. Doc 07 argues for the smallest value that still feels like a payoff.`,
+    () => { S.maxMarksConsumed = bestMax; }, bestMax !== S.maxMarksConsumed);
+
+  // --- 6. Damage mix ----------------------------------------------------
+  // What the SIM measured, versus what the distribution asked for. The two
+  // differ because uptime, accuracy, armored phases and Mark timing all bite,
+  // which is exactly why the mix is nudged against measured share, not entered
+  // share. In budget mode this moves the distribution; in canon mode it moves
+  // the coefficients that fill doc 03's gaps.
+  const tot = [1,2,3,4,5].reduce((a, n) => a + res.src[n], 0) || 1;
+  const share = n => res.src[n] / tot;
+  const erShare = share(2) + share(3);
+  const scaleFor = (curShare, target) => curShare > 0.001 ? Math.min(4, Math.max(0.05, target / curShare)) : 2;
+  const budgetMode = S.baseMode === "budget";
+  if (budgetMode) {
+    // The contract is a published design call, not a free variable — so the
+    // sheet checks compliance rather than re-solving numbers doc 08 already fixed.
+    const drifted = ROLE_GROUPS.filter(g => [1,2,3,4,5]
+      .some(n => Math.abs((S.contract[g].mix[n] || 0) - CONTRACT[g].mix[n]) > 0.005));
+    if (drifted.length) {
+      add("contract", "Distribution vs doc 08", drifted.map(g => CONTRACT[g].label).join(", ") + " edited",
+        "restore contract",
+        `The role contract in doc 08 is a published design call. ${drifted.length === 1 ? "This row has" : "These rows have"} been edited away from it — either fold the change back into doc 08 or restore, but do not let the sheet and the doc disagree silently.`,
+        () => { for (const g of drifted) S.contract[g].mix = { ...CONTRACT[g].mix }; }, true);
+    }
+    // Authored vs measured: uptime, accuracy, armored phases and Mark timing all
+    // bend the shape, and a big gap is information rather than a knob to turn.
+    const authored = (() => {
+      let tot = 0; const acc = { 1:0, 2:0, 3:0, 4:0, 5:0 };
+      for (const s of activeTeam()) {
+        const h = heroDef(s.id), g = groupOf(h), b = budgetBases(roleWeight(h), g), shg = mixShares(g);
+        for (const n of [1,2,3,4,5]) { const v = b.totalDps * shg[n] * currencyOf(g, n).dmg; acc[n] += v; tot += v; }
+      }
+      return tot > 0 ? { 1:acc[1]/tot, 2:acc[2]/tot, 3:acc[3]/tot, 4:acc[4]/tot, 5:acc[5]/tot } : null;
+    })();
+    if (authored) {
+      const worst = [1,2,3,4,5].map(n => ({ n, d: share(n) - authored[n] }))
+        .sort((a2, b2) => Math.abs(b2.d) - Math.abs(a2.d))[0];
+      if (Math.abs(worst.d) > 0.10) {
+        add("mixDrift", "Authored vs measured mix", `S${worst.n} authored ${(authored[worst.n] * 100).toFixed(0)}%`,
+          `lands at ${(share(worst.n) * 100).toFixed(0)}%`,
+          `The contract asks S${worst.n} for ${(authored[worst.n] * 100).toFixed(0)}% of this team's damage and the simulation delivers ${(share(worst.n) * 100).toFixed(0)}%. The gap is execution, not authoring — uptime, accuracy, the armored phase and Mark timing all bend the shape. Worth knowing before anyone "fixes" a base number that was never wrong.`,
+          null, true);
+      }
+    }
+  } else {
+    if (Math.abs(erShare - TARGET.mix.er) > TARGET.mixTol) {
+      const k = scaleFor(erShare, TARGET.mix.er);
+      const n2 = Math.round(S.coef.s2 * k * 20) / 20, n3 = Math.round(S.coef.s3 * k * 20) / 20;
+      add("er", "S2+S3 base coefficients", `${S.coef.s2.toFixed(2)} / ${S.coef.s3.toFixed(2)} × S1`,
+        `${n2.toFixed(2)} / ${n3.toFixed(2)} × S1`,
+        `E and R land ${(erShare * 100).toFixed(1)}% of team damage; the DPS row asks for ${(TARGET.mix.er * 100)}%. Below that they are dead buttons, above it they outshine the palette the game is actually about.`,
+        () => { S.coef.s2 = n2; S.coef.s3 = n3; }, true);
+    }
+    if (Math.abs(share(4) - TARGET.mix.s4) > TARGET.mixTol) {
+      const n4 = Math.round(S.coef.s4 * scaleFor(share(4), TARGET.mix.s4) * 4) / 4;
+      add("s4", "S4 direct-hit coefficient", S.coef.s4.toFixed(2) + " × S1", n4.toFixed(2) + " × S1",
+        `Ultimates land ${(share(4) * 100).toFixed(1)}% of team damage; the DPS row asks for ${(TARGET.mix.s4 * 100)}%.`,
+        () => { S.coef.s4 = n4; }, true);
+    }
+  }
+
+  // --- 6c. Healing supply vs what the fight demands ----------------------
+  const totalDur = res.perPhase.reduce((a2, l) => a2 + l.dur, 0) || 1;
+  const avgDemand = res.perPhase.reduce((a2, l) => a2 + l.incoming, 0) / totalDur;
+  const worstDemand = Math.max(0, ...res.perPhase.map(l => l.dur > 0 ? l.incoming / l.dur : 0));
+  const supply = dpsInfo.healTotal;
+  {
+    const healers = activeTeam().filter(s => groupOf(heroDef(s.id)) === "healer").length;
+    const label = fmt(supply) + " /s from " + healers + " healer" + (healers === 1 ? "" : "s");
+    if (supply < worstDemand) {
+      add("healing", "Healing supply", label, fmt(worstDemand) + " /s needed",
+        `The contract's healing shares produce ${fmt(supply)} HP/s against a worst-phase demand of ${fmt(worstDemand)}/s (fight average ${fmt(avgDemand)}/s) after ${(mitigationValue() * 100).toFixed(0)}% mitigation. ${supply >= avgDemand ? "Sustained phases are covered; the burst is not — which is the intended tension, but it means the tank's mitigation is load-bearing." : "Even the average is short: raise the healer row's healing shares, add a second healer, or lower the boss's outgoing damage."}`,
+        null, true);
+    } else if (worstDemand > 0 && supply > worstDemand * 1.5) {
+      add("healing", "Healing supply", label, "~" + fmt(worstDemand) + " /s would do",
+        `Healing outruns the worst phase by ${(supply / worstDemand).toFixed(1)}× — nobody is ever in danger, so every defensive decision in the fight is free and the healer is just an Amp battery. Either the healer row's shares are too generous, the boss's outgoing damage is too low, or the fight needs a burst phase that actually threatens the team.`,
+        null, true);
+    }
+  }
+
+  // --- 6c2. Do the heals fit inside a health bar? ------------------------
+  // Healing is derived from the hero budget; HP is derived from the boss's
+  // outgoing damage. Nothing forces those two to agree, and when they don't it
+  // shows up here first — a heal worth more than a full bar is not a heal.
+  {
+    const hpd = heroHpDesign();
+    const hb = budgetBases(0.60, "healer");
+    const pipeHeal = (1 + Math.min(S.amp, C.maxAmp)) * gearMult() * fmtMult() * atkMult();
+    const midHeal = hb.heal[3] * pipeHeal;
+    const ratio = hpd.byGroup.healer > 0 ? midHeal / hpd.byGroup.healer : 0;
+    if (ratio > 0.6) {
+      // What healing share would put the mid heal at ~35% of a bar?
+      const want = S.contract.healer.mix[3] * (0.35 / ratio);
+      add("healSize", "Heal size vs health bars", `mid heal = ${(ratio * 100).toFixed(0)}% of a bar`,
+        `S3 share ${(want * 100).toFixed(0)}% → ~35%`,
+        `The healer row's mid single-target heal comes out at ${fmt(midHeal)} against a ${fmt(hpd.byGroup.healer)} HP bar — one cast refills ${(ratio * 100).toFixed(0)}% of a player. Healing is derived from the hero budget while HP is derived from the boss's outgoing damage, and this team out-damages the boss by ${(dpsInfo.total / Math.max(1, worstDemand)).toFixed(0)}×, so healing sized off the hero budget dwarfs the fight. Three ways out: the boss hits far harder, the healer row spends less of its budget on healing, or healing stops being quoted in damage-equivalents and becomes % of max HP.`,
+        () => { S.contract.healer.mix[3] = Math.round(want * 200) / 200; }, true);
+    }
+  }
+
+  // --- 6d. Does the overheal→Amp rule survive contact with these numbers? --
+  {
+    const surplus = Math.max(0, supply - avgDemand);
+    const implied = surplus * C.overhealAmpWindowS / C.overhealPerAmpPercent / 100;
+    if (S.amp > 0.01 && implied < S.amp * 0.5) {
+      const needed = S.amp * 100 * C.overhealPerAmpPercent / C.overhealAmpWindowS;
+      const fixedRate = surplus > 0 ? Math.max(1, Math.round(C.overhealAmpWindowS * surplus / (S.amp * 100))) : null;
+      add("ampRule", "Overheal → Amp conversion", `1000 overheal = +1% (doc 02)`,
+        fixedRate ? `~${fixedRate} overheal = +1%` : "no surplus to convert",
+        `The team overheals ${fmt(surplus)}/s, which under doc 02's rate is worth +${(implied * 100).toFixed(2)}% Amp — not the ${Math.round(S.amp * 100)}% the slider assumes. Holding ${Math.round(S.amp * 100)}% would need ${fmt(needed)} overheal per second, roughly ${(needed / Math.max(1, supply)).toFixed(0)}× the team's entire healing output. This inverts open issue S-1: Amp does not pin at its cap, it sits near zero. Either the conversion rate moves by three orders of magnitude, or Amp comes from support buffs and the overheal clause is flavour.`,
+        null, true);
+    }
+  }
+
+  // --- 6b. The budget vs what canon already implies ----------------------
+  {
+    const cr = canonReferenceDps();
+    const want = Math.round(cr.total / 5) * 5;
+    add("budget", "DPS budget (base-100 hero)", S.budgetDps + " DPS", want + " DPS",
+      `Doc 03's own numbers for a base-100 hero add up to ${cr.total.toFixed(0)} reference DPS — palette ${cr.s1.toFixed(0)}, basic ${cr.s5.toFixed(0)}, ultimate ${cr.ult.toFixed(0)}. Note the shape that implies: canon puts ${(cr.s5 / cr.total * 100).toFixed(0)}% of a hero's damage on the free basic attack and only ${(cr.s1 / cr.total * 100).toFixed(0)}% on the palette the whole game is about. Matching the budget to canon keeps totals honest; the distribution table is where you fix the shape.`,
+      () => { S.budgetDps = want; }, Math.abs(want - S.budgetDps) > 2);
+  }
+
+  // --- 7. Focus sustainability -----------------------------------------
+  const worstFocus = Math.max(0, ...dpsInfo.per.map(p => p.rot.focusPerS));
+  if (worstFocus > S.focusRegen + 0.1) {
+    const need = Math.ceil(worstFocus);
+    add("focus", "Focus regen", S.focusRegen + " /s", need + " /s",
+      `The busiest hero's rotation spends ${worstFocus.toFixed(1)} Focus/s. Below that, the rotation stalls on resource — which is a mechanic only if you meant it.`,
+      () => { S.focusRegen = need; }, true);
+  }
+
+  // --- 8. P-1 recommendation -------------------------------------------
+  if (S.beatRule) {
+    add("p1", "P-1 Beat applies to skills", "on (code default)", "off (doc 07)",
+      `Doc 07 recommends Beat scale basics only, with skills taking a flat +25% on the payoff beat. Under the current setting an off-beat skill cast loses 47% of its value, which teaches players to stand still and wait instead of reading the boss.`,
+      () => { S.beatRule = false; }, true);
+  }
+
+  // --- 8b. Palette width vs the answer window ---------------------------
+  // The wheel has to be readable inside the window it answers: doc 03 ships
+  // 4–8 options, and every extra one costs accuracy for the whole roster.
+  {
+    const perOption = effWindow() / S.paletteN;
+    const want = perOption < 1.2 ? Math.max(4, Math.floor(effWindow() / 1.2))
+      : perOption > 2.6 ? Math.min(8, Math.ceil(effWindow() / 2.6)) : S.paletteN;
+    if (want !== S.paletteN) {
+      add("paletteN", "Palette sub-skills", S.paletteN, want,
+        `At ${S.paletteN} options the player gets ${perOption.toFixed(1)} s of window per option to recognise, decide and cast; the readable band is roughly 1.2–2.6 s. Widening the wheel is knowledge depth, not damage — it costs ${Math.round((1 - subSkillAccMult()) * 100)}% accuracy across the roster right now.`,
+        () => { S.paletteN = want; }, true);
+    }
+  }
+
+  // --- 8c. Defensive coverage vs the worst phase -------------------------
+  {
+    const km = kitMitigation(activeTeam());
+    const worstRaw = Math.max(0, ...res.perPhase.map(l => l.dur > 0 ? l.rawIncoming / l.dur : 0));
+    if (worstRaw > 0) {
+      const thin = km.parts.filter(p => p.duty < 0.4);
+      add("defCoverage", "Defensive coverage",
+        `${(mitigationValue() * 100).toFixed(0)}% from ${km.parts.length} cooldown${km.parts.length === 1 ? "" : "s"}`,
+        `${fmt(worstDemand)} HPS demanded`,
+        `The worst phase throws ${fmt(worstRaw)} damage/s at ${activeTeam().length} players; ${S.useKitMitigation ? "the team's own kits" : "the manual slider"} takes it to ${fmt(worstDemand)}/s.` +
+        (thin.length ? ` ${thin.map(p => `${p.hero} S${p.slot} is only up ${(p.duty * 100).toFixed(0)}% of the time`).join(", ")} — a defensive button below ~40% duty protects against a specific telegraph, not against the fight.` : ` Every defensive cooldown clears 40% duty, so mitigation is a baseline rather than a reaction.`),
+        null, false);
+    }
+  }
+
+  // --- 8d. Do the difficulty tiers actually gate anyone? ------------------
+  // The only lever that can gate is slack: gear buys ~11% of kill time (12%
+  // Rule), so a tier separates exactly when its kill target sits inside that.
+  if (matrixCache && matrixCache.length) {
+    const gearEdge = C.maxGear;                       // 1.12
+    const gateFrac = Math.round((1 / gearEdge + 0.02) * 100) / 100;  // ≈0.91
+    for (const m of matrixCache) {
+      const refCell = m.cells.find(c => c.corner === m.ref);
+      const d = S.difficulties.find(x => x.id === m.id);
+      if (refCell && refCell.ok && refCell.killTime === null) {
+        add("diff-" + m.id, `${m.name}: unclearable at its own target`, "reference corner wipes", "ease the tier",
+          `${m.name} is tuned for ${cornerDef(m.ref).label}, but that corner cannot finish before enrage even at the HP the sheet derived — the search hit its floor. Lower this tier's regen multiplier, widen its window, or lengthen the enrage timer.`,
+          null, true);
+      } else if (cornerDef(m.ref).gear > 1 && !m.gateHolds && m.weakerClearing.length) {
+        const suggested = Math.max(d.killFrac, gateFrac);
+        add("diff-" + m.id, `${m.name}: no gate`, `kill target ${Math.round(d.killFrac * 100)}% of enrage`,
+          `${Math.round(suggested * 100)}%`,
+          `${m.name} is meant to be the wall for ${cornerDef(m.ref).label}, but ${m.weakerClearing.map(c => cornerDef(c).label).join(", ")} clear it too. Full gear is worth only +${((gearEdge - 1) * 100).toFixed(0)}% damage (the 12% Rule), which is ${((1 - 1 / gearEdge) * 100).toFixed(0)}% of kill time — so the tier locks an under-geared group out only if its target kill time sits past ${Math.round(gateFrac * 100)}% of the enrage timer. Raising boss damage or regen will not gate anyone: deaths are not modeled, because no hero HP exists in canon.`,
+          () => { d.killFrac = suggested; if (d.id === S.difficulty) S.killTarget = Math.round(S.enrage * suggested); },
+          Math.abs(suggested - d.killFrac) > 0.005);
+      }
+    }
+  }
+
+  // --- 8e. Do two tiers gate the same population? ------------------------
+  if (matrixCache && matrixCache.length > 1) {
+    const sig = m => m.cells.filter(c => c.ok && c.killTime !== null).map(c => c.corner).sort().join(",");
+    const seen = new Map();
+    for (const m of matrixCache) {
+      const k = sig(m);
+      if (seen.has(k)) {
+        add("tier-dup-" + m.id, `${m.name} = ${seen.get(k)}: same gate`, "identical clear set", "differentiate by feel or reward",
+          `${seen.get(k)} and ${m.name} admit exactly the same corners (${k || "none"}), so as a barrier they are one tier. That is inherent: with two gear states there are only two possible gates — "everyone" and "geared only". If both tiers should exist, the difference has to be what the fight demands of a player (window pressure, mechanics, deaths) and what it pays out, not who can finish it.`,
+          null, true);
+      } else seen.set(k, m.name);
+    }
+  }
+
+  // --- 8f. Slots too thin to feel, per role ------------------------------
+  {
+    const thin = [];
+    for (const g of ROLE_GROUPS) {
+      const shg = mixShares(g);
+      for (const n of [1,2,3,4,5]) {
+        if (shg[n] > 0 && shg[n] < 0.05) thin.push(`${CONTRACT[g].label} S${n} (${(shg[n] * 100).toFixed(0)}%)`);
+      }
+    }
+    if (thin.length) {
+      add("thinSlots", "Slots below the feel threshold", thin.length + " of 20", "raise or zero them",
+        `${thin.join(", ")} — under 5% of a hero's budget is below the point where a player can feel the button pay off. Either raise the share or take it to zero and let the slot be honest utility.`,
+        null, true);
+    }
+  }
+
+  // --- 8g. Mitigation headroom against the cap ---------------------------
+  {
+    const km = kitMitigation(activeTeam());
+    if (km.raw > C.maxMitigation) {
+      add("mitCap", "Mitigation vs the 0.40 cap", (km.raw * 100).toFixed(0) + "% supplied",
+        (C.maxMitigation * 100).toFixed(0) + "% usable",
+        `This team's kits stack ${(km.raw * 100).toFixed(0)}% mitigation and doc 08 caps it at ${(C.maxMitigation * 100).toFixed(0)}% — ${((km.raw - C.maxMitigation) * 100).toFixed(0)} points are wasted, which means one of those defensive cooldowns is doing nothing when the others are up. Stagger the durations or lower a magnitude.`,
+        null, true);
+    }
+  }
+
+  // --- 9. Comp legality --------------------------------------------------
+  const roles = activeTeam().map(s => heroDef(s.id).role);
+  if (!roles.includes("tank") || !roles.includes("healer")) {
+    add("comp", "Team composition", roles.join(", ") || "empty", "add " + [!roles.includes("tank") ? "a tank" : "", !roles.includes("healer") ? "a healer" : ""].filter(Boolean).join(" and "),
+      `Doc 02: a valid team needs at least one tank and one healer. The queue terminal warns but does not block, so the math should.`,
+      null, true);
+  }
+  return out;
+}
+
+/* =============================== RENDER =============================== */
+const $ = id => document.getElementById(id);
+const fmt = n => n >= 10000 ? Math.round(n).toLocaleString("en-US") : (Math.round(n * 10) / 10).toLocaleString("en-US");
+const mmss = s => `${Math.floor(s / 60)}:${String(Math.round(s) % 60).padStart(2, "0")}`;
+const pct = v => (v * 100).toFixed(1) + "%";
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+/** Wrap a label in a glossary bubble trigger. */
+const T = (key, label) => `<span class="term" data-t="${key}" tabindex="0" role="button">${esc(label)}</span>`;
+
+/* ------------------------------ bubbles ------------------------------ */
+(function bubbles() {
+  const b = $("bubble");
+  let pinned = null;
+  function show(el) {
+    const g = GLOSSARY[el.dataset.t];
+    if (!g) return;
+    b.querySelector(".btitle").textContent = g.t;
+    b.querySelector(".bbody").textContent = g.plain;
+    const m = b.querySelector(".bmath");
+    m.innerHTML = g.math ? esc(g.math) : "";
+    m.style.display = g.math ? "block" : "none";
+    b.style.display = "block";
+    const r = el.getBoundingClientRect(), bb = b.getBoundingClientRect();
+    let left = r.left, top = r.bottom + 8;
+    if (left + bb.width > window.innerWidth - 10) left = window.innerWidth - bb.width - 10;
+    if (top + bb.height > window.innerHeight - 10) top = Math.max(10, r.top - bb.height - 8);
+    b.style.left = Math.max(10, left) + "px";
+    b.style.top = top + "px";
+  }
+  function hide() { if (!pinned) b.style.display = "none"; }
+  document.addEventListener("pointerover", e => {
+    const t = e.target.closest(".term"); if (t && !pinned) show(t);
+  });
+  document.addEventListener("pointerout", e => { if (e.target.closest(".term") && !pinned) hide(); });
+  document.addEventListener("focusin", e => { const t = e.target.closest(".term"); if (t) { pinned = null; show(t); } });
+  document.addEventListener("focusout", e => { if (e.target.closest(".term")) { pinned = null; hide(); } });
+  document.addEventListener("click", e => {
+    const t = e.target.closest(".term");
+    if (t) { pinned = pinned === t ? null : t; show(t); e.preventDefault(); }
+    else if (!e.target.closest("#bubble")) { pinned = null; hide(); }
+  });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") { pinned = null; hide(); } });
+  window.addEventListener("scroll", () => { pinned = null; hide(); }, true);
+})();
+
+/* Every static .term in the markup gets keyboard access too. */
+function upgradeTerms() {
+  document.querySelectorAll(".term:not([tabindex])").forEach(el => {
+    el.setAttribute("tabindex", "0"); el.setAttribute("role", "button");
+  });
+}
+
+function renderGlossary() {
+  $("glossaryBody").innerHTML = `<table><thead><tr><th style="width:180px">Term</th><th>In plain language</th><th style="width:270px">In numbers</th></tr></thead><tbody>` +
+    Object.entries(GLOSSARY).map(([k, g]) =>
+      `<tr><td>${esc(g.t)}</td><td>${esc(g.plain)}</td><td style="color:var(--muted)">${esc(g.math || "—")}</td></tr>`).join("") +
+    `</tbody></table>`;
+}
+
+function renderTeam() {
+  const tb = $("teamTable").querySelector("tbody");
+  tb.innerHTML = "";
+  S.team.forEach((slot, i) => {
+    const bench = i >= S.teamSize;
+    const tr = document.createElement("tr");
+    if (bench) tr.className = "bench";
+    const opts = ['<option value="">— empty —</option>']
+      .concat(HEROES.map(h => `<option value="${h.id}" ${h.id === slot.id ? "selected" : ""}>${h.name} (${h.role})</option>`)).join("");
+    tr.innerHTML = `<td>${i + 1}${bench ? ' <span class="prov">bench</span>' : ""}</td>
+      <td><select data-i="${i}" data-k="id">${opts}</select></td>
+      <td class="num"><input type="number" min="0" max="100" step="5" value="${Math.round(slot.acc * 100)}" data-i="${i}" data-k="acc"></td>
+      <td class="num"><input type="number" min="0" max="100" step="5" value="${Math.round(slot.payoff * 100)}" data-i="${i}" data-k="payoff"></td>
+      <td class="num"><input type="number" min="0" max="100" step="5" value="${Math.round(slot.uptime * 100)}" data-i="${i}" data-k="uptime"></td>
+      <td class="num"><input type="number" min="0" max="100" step="10" value="${Math.round(slot.foreign * 100)}" data-i="${i}" data-k="foreign"></td>`;
+    tb.appendChild(tr);
+  });
+  tb.querySelectorAll("select,input").forEach(el => el.addEventListener("change", e => {
+    const i = +e.target.dataset.i, k = e.target.dataset.k;
+    if (k === "id") S.team[i].id = e.target.value;
+    else S.team[i][k] = Math.min(100, Math.max(0, +e.target.value)) / 100;
+    recompute(k === "id");
+  }));
+}
+
+function renderPhases() {
+  const tb = $("phaseTable").querySelector("tbody");
+  tb.innerHTML = "";
+  S.phases.forEach((p, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${esc(p.name)}${p.skillCheck ? ' <span class="prov doc">check</span>' : ""}</td>
+      <td class="num"><input type="number" min="5" max="600" step="5" value="${p.dur}" data-i="${i}" data-k="dur"></td>
+      <td class="num"><input type="number" min="0" max="2" step="0.05" value="${p.taken}" data-i="${i}" data-k="taken"></td>
+      <td class="num"><input type="number" min="0" max="0.1" step="0.005" value="${p.regen}" data-i="${i}" data-k="regen"></td>
+      <td class="num"><input type="number" min="0" max="1000" step="10" value="${p.hit}" data-i="${i}" data-k="hit"></td>
+      <td class="num"><input type="number" min="0" max="60" step="1" value="${p.per}" data-i="${i}" data-k="per"></td>
+      <td><input type="checkbox" ${p.aoe ? "checked" : ""} data-i="${i}" data-k="aoe"></td>
+      <td><button data-del="${i}" title="remove phase">×</button></td>`;
+    tb.appendChild(tr);
+  });
+  tb.querySelectorAll("input").forEach(el => el.addEventListener("change", e => {
+    const i = +e.target.dataset.i, k = e.target.dataset.k;
+    S.phases[i][k] = k === "aoe" ? e.target.checked : +e.target.value;
+    recompute();
+  }));
+  tb.querySelectorAll("button[data-del]").forEach(el => el.addEventListener("click", e => {
+    S.phases.splice(+e.target.dataset.del, 1); S.boss = "custom"; $("inBoss").value = "custom";
+    renderPhases(); recompute();
+  }));
+}
+
+function renderRoster() {
+  $("rosterTable").querySelector("tbody").innerHTML = HEROES.map(h => `<tr>
+    <td>${h.name}</td><td>${h.role}</td><td>${h.kit}</td><td class="num">${h.base}</td>
+    <td>${esc(h.s1.name)}</td><td class="num">${h.s1.dmg == null ? "borrowed" : h.s1.dmg || "—"}</td>
+    <td>${esc(h.s2.name)}${h.s2.dmg != null ? ` <span class="prov doc">${h.s2.dmg}</span>` : ""}</td>
+    <td>${esc(h.s3.name)}${h.s3.dmg != null ? ` <span class="prov doc">${h.s3.dmg}</span>` : ""}</td>
+    <td>${esc(h.s4.name)}</td><td class="num">${h.s4.perMark || "—"}</td>
+    <td><span class="prov ${h.prov}">${h.prov}</span></td>
+  </tr>`).join("");
+}
+
+/* ------------------ difficulty editor + clear matrix ------------------ */
+function renderDifficulties(matrix) {
+  const tb = $("diffTable").querySelector("tbody");
+  tb.innerHTML = S.difficulties.map((d, i) => {
+    const m = matrix ? matrix.find(x => x.id === d.id) : null;
+    const opts = CORNERS.map(c => `<option value="${c.id}" ${c.id === d.ref ? "selected" : ""}>${c.label}</option>`).join("");
+    const cur = d.id === S.difficulty;
+    return `<tr${cur ? ' style="color:var(--ink)"' : ' style="color:var(--ink-2)"'}>
+      <td>${esc(d.name)}${cur ? ' <span class="prov">editing</span>' : ""}</td>
+      <td><select data-d="${i}" data-k="ref">${opts}</select></td>
+      <td class="num"><input type="number" min="30" max="100" step="1" value="${Math.round(d.killFrac * 100)}" data-d="${i}" data-k="killPct"> %</td>
+      <td class="num"><input type="number" min="0.5" max="6" step="0.05" value="${d.dmgMult}" data-d="${i}" data-k="dmgMult"></td>
+      <td class="num"><input type="number" min="0" max="6" step="0.05" value="${d.regenMult}" data-d="${i}" data-k="regenMult"></td>
+      <td class="num"><input type="number" min="0.4" max="1.5" step="0.05" value="${d.windowMult}" data-d="${i}" data-k="windowMult"></td>
+      <td class="num">${m && m.hpBySize[3] != null ? fmt(m.hpBySize[3]) : "—"}</td>
+      <td class="num">${m && m.hpBySize[5] != null ? fmt(m.hpBySize[5]) : "—"}</td>
+      <td>${m ? (m.gateHolds
+        ? '<span class="status good">✓ gate holds</span>'
+        : `<span class="status ${d.ref === "3ng" ? "good" : "warning"}">${d.ref === "3ng" ? "entry tier — open to all" : "⚠ weaker corners clear it too"}</span>`) : ""}</td>
+    </tr>`;
+  }).join("");
+  tb.querySelectorAll("input,select").forEach(el => el.addEventListener("change", e => {
+    const i = +e.target.dataset.d, k = e.target.dataset.k;
+    if (k === "ref") S.difficulties[i].ref = e.target.value;
+    else if (k === "killPct") S.difficulties[i].killFrac = Math.max(0.3, Math.min(1, +e.target.value / 100));
+    else S.difficulties[i][k] = +e.target.value;
+    if (S.difficulties[i].id === S.difficulty) {
+      S.killTarget = Math.round(S.enrage * S.difficulties[i].killFrac);
+      if (k === "ref") S.gear = cornerDef(S.difficulties[i].ref).gear; // live sim follows the tier's corner
+    }
+    syncInputs();
+    recompute();
+  }));
+}
+
+function renderMatrix(matrix) {
+  $("matrixTable").querySelector("tbody").innerHTML = matrix.map(m => {
+    const cells = CORNERS.map(c => {
+      const cell = m.cells.find(x => x.corner === c.id);
+      if (!cell || !cell.ok) return `<td class="num" style="color:var(--muted)">—</td>`;
+      const ref = cell.isRef ? ' <span class="prov">tuned</span>' : "";
+      if (cell.killTime === null) {
+        // A wipe below the tuning target is the tier working as intended.
+        const good = cell.weaker && !cell.isRef;
+        return `<td class="num"><span class="status ${cell.isRef ? "critical" : good ? "muted" : "warning"}" ${good ? 'style="color:var(--muted)"' : ""}>✕ ${(cell.remaining * 100).toFixed(0)}% left</span>${ref}</td>`;
+      }
+      const margin = S.enrage - cell.killTime;
+      const cls = margin < S.enrage * 0.05 ? "warning" : "good";
+      return `<td class="num"><span class="status ${cls}">✓ ${mmss(cell.killTime)}</span> <span style="color:var(--muted)">+${mmss(margin)}</span>${ref}</td>`;
+    }).join("");
+    return `<tr><td>${esc(m.name)}</td>${cells}</tr>`;
+  }).join("");
+}
+
+/* ---------------------- buff effect + coverage ---------------------- */
+function renderBuffs(res, dpsInfo) {
+  const a = atkMult(), mitig = mitigationValue();
+  const km = kitMitigation(activeTeam());
+  const worstRaw = Math.max(0, ...res.perPhase.map(l => l.dur > 0 ? l.rawIncoming / l.dur : 0));
+  const worstMit = Math.max(0, ...res.perPhase.map(l => l.dur > 0 ? l.incoming / l.dur : 0));
+  const avgMit = res.perPhase.reduce((a2, l) => a2 + l.incoming, 0) /
+    Math.max(0.1, res.perPhase.reduce((a2, l) => a2 + l.dur, 0));
+  const dpsNoBuff = dpsInfo.total / a;
+  const supply = dpsInfo.healTotal;
+  // Healing that lands on a full-HP team is not wasted — doc 02 turns it into Amp.
+  const surplus = Math.max(0, supply - avgMit);
+  // doc 02: 1000 overheal = +1% Amp for 5 s. Sustained Amp is therefore the
+  // overheal banked inside one 5 s window, divided by 1000, as a percentage.
+  const impliedAmp = surplus * C.overhealAmpWindowS / C.overhealPerAmpPercent / 100;
+  $("buffTiles").innerHTML =
+    tile("Attack buff, effective", "×" + a.toFixed(3),
+      `+${Math.round(S.buffs.atkMag * 100)}% at ${Math.round(S.buffs.atkCov * 100)}% coverage`,
+      { cls: "good", icon: "▲", text: `+${fmt(dpsInfo.total - dpsNoBuff)} team DPS` }) +
+    tile("Mitigation, effective", (mitig * 100).toFixed(1) + "%",
+      S.useKitMitigation
+        ? `from ${km.parts.length} kit cooldown${km.parts.length === 1 ? "" : "s"}${km.raw > C.maxMitigation ? ` · ${(km.raw * 100).toFixed(0)}% before the ${(C.maxMitigation * 100).toFixed(0)}% cap` : ""}`
+        : `manual: ${Math.round(S.buffs.defMag * 100)}% at ${Math.round(S.buffs.defCov * 100)}% coverage`,
+      { cls: "good", icon: "▼", text: `−${fmt(worstRaw - worstMit)} incoming /s at the worst phase` }) +
+    tile("Healing supply vs demand", fmt(supply) + " /s",
+      `worst phase demands ${fmt(worstMit)}/s · fight average ${fmt(avgMit)}/s`,
+      supply >= worstMit ? { cls: "good", icon: "✓", text: "covers the worst phase" }
+        : supply >= avgMit ? { cls: "warning", icon: "⚠", text: "covers the average, not the burst" }
+        : { cls: "critical", icon: "✕", text: "under-heals the fight" }) +
+    tile("Overheal → Amp", "+" + (impliedAmp * 100).toFixed(2) + "%",
+      `${fmt(surplus)}/s of healing lands on full HP · the slider assumes ${Math.round(S.amp * 100)}%`,
+      impliedAmp >= S.amp ? { cls: "good", icon: "✓", text: "the Amp slider is earned" }
+        : { cls: "critical", icon: "✕", text: `needs ${fmt(S.amp * 100 * C.overhealPerAmpPercent / C.overhealAmpWindowS)}/s of overheal` });
+
+  $("mitTable").querySelector("tbody").innerHTML = km.parts.length
+    ? km.parts.map(p => `<tr>
+        <td>${esc(p.hero)}</td><td><span class="key">${SLOT_META[p.slot - 1].key}</span> S${p.slot}</td>
+        <td class="num">${(p.mag * 100).toFixed(0)}%</td>
+        <td class="num">${p.durS} s</td>
+        <td class="num">${p.castsPerMin > 0 ? (60 / p.castsPerMin).toFixed(1) + " s" : "—"}</td>
+        <td class="num">${(p.duty * 100).toFixed(0)}% × ${p.target === "team" ? "team" : "1 player"}</td>
+        <td class="num">${(p.value * 100).toFixed(1)}%</td>
+      </tr>`).join("") + `<tr class="total"><td colspan="6">Team total${km.raw > C.maxMitigation ? ` (capped from ${(km.raw * 100).toFixed(1)}%)` : ""}</td>
+        <td class="num">${(km.capped * 100).toFixed(1)}%</td></tr>`
+    : `<tr><td colspan="7" style="color:var(--muted)">no mitigation cooldowns on this team — every role row except healer carries one</td></tr>`;
+}
+
+/* ------------------------- derived hero HP ------------------------- */
+function renderHeroHp(dpsInfo) {
+  const hp = heroHpDesign();
+  const g = hp.byGroup;
+  $("hpTiles").innerHTML =
+    tile("Reference HP", fmt(hp.refHp), `before role weights · binding constraint: ${hp.binding}`,
+      { cls: "good", icon: "✓", text: `${S.hpDesign.ttlTargetS}s to live · hits ≤ ${Math.round(S.hpDesign.maxHitPct * 100)}%` }) +
+    tile("Tank / DPS / Healer", `${fmt(g.tank)} / ${fmt(g.dps)} / ${fmt(g.healer)}`,
+      `support ${fmt(g.support)} · rounded to 25`) +
+    tile("Worst stream", fmt(hp.worstPerTarget) + " /s",
+      `on one target during ${esc(hp.worstPhase)} · ${fmt(hp.worstAoe)}/s each in AOE · after ${(hp.mitigation * 100).toFixed(0)}% mitigation`) +
+    tile("Team HP pool", fmt(ROLE_GROUPS.length ? activeTeam().reduce((a, s) => a + g[groupOf(heroDef(s.id))], 0) : 0),
+      `${activeTeam().length} players · healers refill it in ${dpsInfo.healTotal > 0
+        ? (activeTeam().reduce((a, s) => a + g[groupOf(heroDef(s.id))], 0) / dpsInfo.healTotal).toFixed(0) + " s from zero" : "—"}`);
+
+  $("hpTable").querySelector("tbody").innerHTML = ROLE_GROUPS.map(k => {
+    const w = S.hpDesign.weights[k] || 1, v = g[k];
+    const ttlFocus = hp.worstPerTarget > 0 ? v / hp.worstPerTarget : Infinity;
+    const ttlAoe = hp.worstAoe > 0 ? v / hp.worstAoe : Infinity;
+    const hitPct = v > 0 ? hp.biggestHit / v : 0;
+    return `<tr>
+      <td>${CONTRACT[k].label}</td><td class="num">${w.toFixed(2)}</td>
+      <td class="num" style="color:var(--ink)">${fmt(v)}</td>
+      <td class="num">${isFinite(ttlFocus) ? ttlFocus.toFixed(1) + " s" : "—"}</td>
+      <td class="num">${isFinite(ttlAoe) ? ttlAoe.toFixed(1) + " s" : "—"}</td>
+      <td class="num" style="color:${hitPct > 0.5 ? "var(--critical)" : hitPct > 0.35 ? "var(--warning)" : "var(--ink-2)"}">${(hitPct * 100).toFixed(0)}%</td>
+    </tr>`;
+  }).join("");
+
+  // Doc 08 authored healer heals as flat numbers; HP turns them into fractions.
+  const hb = budgetBases(S.hpDesign.weights.healer ? 0.60 : 0.60, "healer");
+  const pipeHeal = (1 + Math.min(S.amp, C.maxAmp)) * gearMult() * fmtMult() * atkMult();
+  const rows = [
+    { name: "S2 · small team heal", v: hb.heal[2], split: activeTeam().length },
+    { name: "S3 · mid single heal", v: hb.heal[3], split: 1 },
+    { name: "S4 · big team heal (per cast)", v: hb.heal[4] + hb.perMarkHeal * Math.min(S.maxMarksConsumed, Math.max(1, S.ultAt)), split: activeTeam().length },
+  ];
+  $("healSizeTable").querySelector("tbody").innerHTML = rows.map(r => {
+    const each = r.v * pipeHeal / Math.max(1, r.split);
+    const ofHealer = each / g.healer, ofTank = each / g.tank;
+    const reads = ofHealer >= 0.6 ? "a full save" : ofHealer >= 0.3 ? "a real heal" : ofHealer >= 0.12 ? "a top-up" : "a tick";
+    return `<tr><td>${esc(r.name)}</td>
+      <td class="num" style="color:${CURRENCY_COLOR.heal}">${fmt(each)}${r.split > 1 ? " each" : ""}</td>
+      <td class="num">${(ofHealer * 100).toFixed(0)}%</td>
+      <td class="num">${(ofTank * 100).toFixed(0)}%</td>
+      <td style="color:var(--muted)">${reads}</td></tr>`;
+  }).join("");
+}
+
+/* ------------- DPS budget → distribution template + per-hero ------------- */
+/** One cell of the contract grid: the share, coloured by its currency. */
+function currencyCell(group, n) {
+  const cur = currencyOf(group, n);
+  const pctOf = k => Math.round((rowFor(group).mix[n] || 0) * 100 * cur[k]);
+  const bits = [];
+  if (cur.dmg > 0) bits.push(`<span style="color:${CURRENCY_COLOR.dmg}">${pctOf("dmg")} dmg</span>`);
+  if (cur.heal > 0) bits.push(`<span style="color:${CURRENCY_COLOR.heal}">${pctOf("heal")} heal</span>`);
+  if (cur.buff > 0) bits.push(`<span style="color:${CURRENCY_COLOR.buff}">${pctOf("buff")} buff</span>`);
+  const mit = (rowFor(group).mitigation || []).filter(m => m.slot === n)
+    .map(m => `<span class="prov design">${Math.round(m.mag * 100)}% mit ${m.durS}s ${m.target}</span>`).join(" ");
+  return `<td class="num">
+    <input type="number" class="tiny" min="0" max="100" step="1" value="${Math.round((rowFor(group).mix[n] || 0) * 100)}" data-g="${group}" data-n="${n}">
+    <div style="font-size:11px">${bits.join(" · ")}</div>${mit ? `<div style="font-size:11px">${mit}</div>` : ""}
+  </td>`;
+}
+
+function renderDistribution() {
+  const rate = refRates();
+  $("mixTable").querySelector("tbody").innerHTML = SLOT_META.map(meta => {
+    const n = meta.n;
+    return `<tr>
+      <td><span class="term" data-t="slot${n}" tabindex="0" role="button">S${n}</span></td>
+      <td><span class="key">${meta.key}</span></td>
+      <td class="num">${(rate[n] * 60).toFixed(1)}</td>
+      <td class="num">${C.focusCost["s" + n]}</td>
+      ${ROLE_GROUPS.map(g => currencyCell(g, n)).join("")}
+    </tr>`;
+  }).join("") + `<tr class="total">
+      <td colspan="4">Sum (normalised to 100% for the derivation)</td>
+      ${ROLE_GROUPS.map(g => {
+        const raw = [1,2,3,4,5].reduce((a, n) => a + (rowFor(g).mix[n] || 0), 0);
+        const off = Math.abs(raw - 1) > 0.005;
+        return `<td class="num" style="color:${off ? "var(--warning)" : "var(--ink-2)"}">${(raw * 100).toFixed(0)}%</td>`;
+      }).join("")}
+    </tr>`;
+
+  const gcdUse = (rate.attempts1 + rate[2] + rate[3] + rate[4]) * C.gcdS;
+  const km = kitMitigation(activeTeam());
+  $("mixNote").innerHTML =
+    `Cooldown + palette casts occupy <b>${(gcdUse * 100).toFixed(0)}%</b> of the <span class="term" data-t="gcd">GCD</span> budget, leaving ${(rate[5] * 60).toFixed(1)} basics/min for every role. ` +
+    `Sub-skill count costs accuracy: ${S.paletteN} options → ×${subSkillAccMult().toFixed(2)} on every player's answer rate. ` +
+    `This team's kits supply <b>${(km.raw * 100).toFixed(0)}%</b> <span class="term" data-t="mitigation">mitigation</span>${km.raw > C.maxMitigation ? ` → capped at ${(C.maxMitigation * 100).toFixed(0)}%` : ""}.` +
+    (S.baseMode === "canon" ? ` <span class="status warning">⚠ canon mode — the derived bases below are shown for comparison but the sim is using doc-03 numbers</span>` : "");
+  $("mixTable").querySelectorAll("input[data-g]").forEach(el => el.addEventListener("change", e => {
+    const g = e.target.dataset.g, n = +e.target.dataset.n;
+    S.contract[g].mix[n] = Math.max(0, +e.target.value) / 100;
+    recompute();
+  }));
+
+  // per-hero budget table — every hero on its own role row
+  $("budgetTable").querySelector("tbody").innerHTML = HEROES.map(h => {
+    const g = groupOf(h), w = roleWeight(h), b = budgetBases(w, g);
+    const cell = n => {
+      const bits = [];
+      if (b.dmg[n] > 0.5) bits.push(`<span style="color:${CURRENCY_COLOR.dmg}">${fmt(b.dmg[n])}</span>`);
+      if (b.heal[n] > 0.5) bits.push(`<span style="color:${CURRENCY_COLOR.heal}">${fmt(b.heal[n])}</span>`);
+      if (b.buff[n] > 0.5) bits.push(`<span style="color:${CURRENCY_COLOR.buff}">${fmt(b.buff[n])}</span>`);
+      return bits.join(" / ") || "—";
+    };
+    const perMarkCell = [
+      b.perMark > 0.5 ? `<span style="color:${CURRENCY_COLOR.dmg}">${fmt(b.perMark)}</span>` : "",
+      b.perMarkHeal > 0.5 ? `<span style="color:${CURRENCY_COLOR.heal}">${fmt(b.perMarkHeal)}</span>` : "",
+    ].filter(Boolean).join(" / ") || "—";
+    const drift = [];
+    if (h.s1.dmg) drift.push(`S1 ${b.dmg[1] / h.s1.dmg - 1 >= 0 ? "+" : ""}${((b.dmg[1] / h.s1.dmg - 1) * 100).toFixed(0)}%`);
+    if (h.s4.perMark && b.perMark > 0.5) drift.push(`/Mark ${b.perMark / h.s4.perMark - 1 >= 0 ? "+" : ""}${((b.perMark / h.s4.perMark - 1) * 100).toFixed(0)}%`);
+    if (h.s4.perMark && b.perMark <= 0.5) drift.push(`/Mark now heals`);
+    const inTeam = activeTeam().some(s => s.id === h.id);
+    return `<tr${inTeam ? "" : ' style="color:var(--muted)"'}>
+      <td>${h.name}${inTeam ? ' <span class="prov">in team</span>' : ""}</td>
+      <td style="color:var(--muted)">${CONTRACT[g].label}</td>
+      <td class="num">${w.toFixed(2)}</td>
+      <td class="num">${fmt(b.totalDps)}</td>
+      <td class="num">${cell(1)}</td><td class="num">${cell(2)}</td><td class="num">${cell(3)}</td>
+      <td class="num">${cell(4)}</td><td class="num">${perMarkCell}</td><td class="num">${cell(5)}</td>
+      <td class="num" style="color:${CURRENCY_COLOR.dmg}">${fmt(b.dpsDamage)}</td>
+      <td class="num" style="color:${CURRENCY_COLOR.heal}">${b.hpsHealing > 0.5 ? fmt(b.hpsHealing) : "—"}</td>
+      <td class="num" style="color:var(--muted)">${drift.join(" · ") || "—"}</td>
+    </tr>`;
+  }).join("");
+}
+
+/* --------------------- per-hero slot damage cards --------------------- */
+function renderSlots(dpsInfo) {
+  const grid = $("slotGrid");
+  const team = activeTeam();
+  if (!team.length) { grid.innerHTML = `<div class="footnote">no heroes selected</div>`; return; }
+  grid.innerHTML = team.map((slot, ti) => {
+    const h = heroDef(slot.id), sl = slotsFor(slot), info = dpsInfo.per[ti];
+    const pipe = dpsInfo.pipe, sb = skillBeat(slot.payoff), pen = fixPenalty(slot);
+    const ultCd = sl[3].cdS;
+    const rows = SLOT_META.map(meta => {
+      const d = sl[meta.n - 1];
+      let perCast, ceil, dps, casts;
+      if (meta.n === 4) {
+        const u = ultDamage(slot, Math.min(S.ultAt, Math.max(1, dpsInfo.steadyMarks)), S.amp);
+        perCast = u.dmg; ceil = maxUlt(slot); dps = info.ultAvg; casts = 60 / ultCd;
+      } else if (meta.n === 5) {
+        perCast = d.base * C.avgBeat * pipe * pen; ceil = ceilingBasic(d.base);
+        dps = info.rot.dmg[5] * pipe; casts = info.rot.rates[5] * 60;
+      } else {
+        perCast = d.base * sb * pipe * pen; ceil = ceilingCast(d.base);
+        dps = info.rot.dmg[meta.n] * pipe;
+        casts = (meta.n === 1 ? info.rot.attempts1 : info.rot.rates[meta.n]) * 60;
+      }
+      const shareOfHero = info.dps > 0 ? dps / info.dps : 0;
+      const isUlt = meta.n === 4;
+      return `<tr>
+        <td><span class="key">${meta.key}</span> <span class="term" data-t="slot${meta.n}" tabindex="0" role="button">S${meta.n}</span></td>
+        <td>${esc(d.name)} <span class="prov ${d.prov}">${d.prov}</span></td>
+        <td class="num"><input type="number" min="0" max="9999" step="5" value="${Math.round(d.base)}" data-h="${h.id}" data-n="${meta.n}" data-f="base" title="Base damage"></td>
+        <td class="num">${isUlt ? `<input type="number" min="0" max="999" step="5" value="${Math.round(d.perMark || 0)}" data-h="${h.id}" data-n="4" data-f="perMark" title="Damage per Mark consumed">` : "—"}</td>
+        <td class="num"><input type="number" min="0.5" max="300" step="0.5" value="${d.cdS}" data-h="${h.id}" data-n="${meta.n}" data-f="cdS" title="Cooldown, seconds"></td>
+        <td class="num"><input type="number" min="0" max="200" step="1" value="${d.focus}" data-h="${h.id}" data-n="${meta.n}" data-f="focus" title="Focus cost"></td>
+        <td class="num">${casts.toFixed(1)}</td>
+        <td class="num">${fmt(perCast)}</td>
+        <td class="num" style="color:var(--muted)">${fmt(ceil)}</td>
+        <td class="num" style="color:${SLOT_COLOR[meta.n]}">${fmt(dps)}</td>
+        <td class="num">${(shareOfHero * 100).toFixed(0)}%</td>
+      </tr>`;
+    }).join("");
+    const focusOk = info.rot.focusPerS <= S.focusRegen + 0.05;
+    return `<div class="slotcard">
+      <h3>${h.name} <span class="role">— ${h.role} · ${h.kit} kit · slot ${ti + 1}</span></h3>
+      <div class="tablewrap"><table>
+        <thead><tr>
+          <th>Slot</th><th>Skill</th><th class="num">Base</th><th class="num">/Mark</th>
+          <th class="num">CD s</th><th class="num">Focus</th><th class="num">Casts/min</th>
+          <th class="num">Per cast</th><th class="num">Ceiling</th><th class="num">DPS</th><th class="num">Share</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr class="total">
+          <td colspan="6">Hero total</td>
+          <td class="num">${((info.rot.attempts1 + info.rot.rates[2] + info.rot.rates[3] + info.rot.rates[4] + info.rot.rates[5]) * 60).toFixed(1)}</td>
+          <td class="num">—</td><td class="num">—</td>
+          <td class="num">${fmt(info.dps)}</td><td class="num">100%</td>
+        </tr></tfoot>
+      </table></div>
+      <div class="footnote" style="margin-top:6px">Focus ${info.rot.focusPerS.toFixed(1)}/s vs ${S.focusRegen}/s regen —
+        <span class="status ${focusOk ? "good" : "critical"}">${focusOk ? "✓ sustainable" : "✕ rotation outruns Focus"}</span></div>
+    </div>`;
+  }).join("");
+
+  grid.querySelectorAll("input[data-h]").forEach(el => el.addEventListener("change", e => {
+    const id = e.target.dataset.h, n = +e.target.dataset.n, f = e.target.dataset.f;
+    S.slotOverrides[id] = S.slotOverrides[id] || {};
+    S.slotOverrides[id][n] = S.slotOverrides[id][n] || {};
+    S.slotOverrides[id][n][f] = +e.target.value;
+    recompute();
+  }));
+}
+
+function tile(label, value, note, status) {
+  return `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div>
+    ${note ? `<div class="note">${note}</div>` : ""}${status ? `<div class="status ${status.cls}">${status.icon} ${status.text}</div>` : ""}</div>`;
+}
+
+function renderChart(res) {
+  const svg = $("chart"), W = 960, H = 300, L = 46, R = 14, T2 = 26, B = 30;
+  const dur = res.samples[res.samples.length - 1].t || 1;
+  const x = t => L + (W - L - R) * t / dur;
+  const y = v => T2 + (H - T2 - B) * (1 - v);
+  let el = "";
+  const cycle = S.phases.reduce((a, p) => a + p.dur, 0);
+  let bandT = 0, ix = 0, labeled = new Set();
+  while (bandT < dur && cycle > 0) {
+    const p = S.phases[ix % S.phases.length];
+    const w = Math.min(p.dur, dur - bandT);
+    if (ix % 2 === 1) el += `<rect x="${x(bandT)}" y="${T2}" width="${x(bandT + w) - x(bandT)}" height="${H - T2 - B}" fill="rgba(255,255,255,0.035)"/>`;
+    if (!labeled.has(p.name) && w > dur * 0.04) {
+      labeled.add(p.name);
+      el += `<text class="phase-band-label" x="${x(bandT) + 4}" y="${T2 - 8}">${esc(p.name.replace(/ .*/, ""))}</text>`;
+    }
+    bandT += p.dur; ix++;
+  }
+  for (const v of [0, 0.25, 0.5, 0.75, 1]) {
+    el += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)" stroke-width="1"/>`;
+    el += `<text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" fill="var(--muted)" font-size="11">${v * 100}%</text>`;
+  }
+  for (let t = 0; t <= dur; t += 60) {
+    el += `<line x1="${x(t)}" x2="${x(t)}" y1="${H - B}" y2="${H - B + 4}" stroke="var(--baseline)"/>`;
+    el += `<text x="${x(t)}" y="${H - B + 16}" text-anchor="middle" fill="var(--muted)" font-size="11">${mmss(t)}</text>`;
+  }
+  el += `<line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" stroke="var(--baseline)"/>`;
+  if (S.enrage <= dur + 1) {
+    const ex = x(Math.min(S.enrage, dur));
+    el += `<line x1="${ex}" x2="${ex}" y1="${T2}" y2="${H - B}" stroke="var(--critical)" stroke-dasharray="4 4" stroke-width="1.5"/>`;
+    el += `<text x="${ex - 4}" y="${T2 + 12}" text-anchor="end" fill="var(--critical)" font-size="11">enrage</text>`;
+  }
+  const pts = res.samples.map(s => `${x(s.t).toFixed(1)},${y(s.hp).toFixed(1)}`).join(" ");
+  el += `<polyline points="${pts}" fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round"/>`;
+  el += `<line id="cross" x1="0" x2="0" y1="${T2}" y2="${H - B}" stroke="var(--muted)" stroke-width="1" opacity="0"/>`;
+  el += `<circle id="dot" r="4" fill="var(--series-1)" stroke="var(--surface)" stroke-width="2" opacity="0"/>`;
+  svg.innerHTML = el;
+
+  const wrap = $("chartwrap"), tip = $("tooltip");
+  svg.onmousemove = ev => {
+    const r = svg.getBoundingClientRect();
+    const t = (ev.clientX - r.left) / r.width * W;
+    const time = Math.max(0, Math.min(dur, (t - L) / (W - L - R) * dur));
+    let best = res.samples[0];
+    for (const s of res.samples) if (Math.abs(s.t - time) < Math.abs(best.t - time)) best = s;
+    const cx = x(best.t), cy = y(best.hp);
+    svg.querySelector("#cross").setAttribute("x1", cx);
+    svg.querySelector("#cross").setAttribute("x2", cx);
+    svg.querySelector("#cross").setAttribute("opacity", "1");
+    const dot = svg.querySelector("#dot");
+    dot.setAttribute("cx", cx); dot.setAttribute("cy", cy); dot.setAttribute("opacity", "1");
+    tip.style.display = "block";
+    tip.innerHTML = `<b>${mmss(best.t)}</b> · ${esc(best.phase || "end")}<br>HP <b>${(best.hp * 100).toFixed(1)}%</b> · Marks <b>${best.marks.toFixed(1)}</b><br>Team DPS <b>${fmt(best.dps)}</b>`;
+    const wr = wrap.getBoundingClientRect();
+    const px = cx / W * r.width;
+    tip.style.left = Math.min(wr.width - tip.offsetWidth - 8, px + 14) + "px";
+    tip.style.top = (cy / H * r.height - 10) + "px";
+  };
+  svg.onmouseleave = () => {
+    tip.style.display = "none";
+    svg.querySelector("#cross").setAttribute("opacity", "0");
+    svg.querySelector("#dot").setAttribute("opacity", "0");
+  };
+}
+
+/* ============================ MAIN RECOMPUTE ============================ */
+let suggestions = [], lastExport = null, suggTimer = null;
+
+function recompute(rebuildTeam) {
+  if (rebuildTeam) renderTeam();
+  const team = activeTeam();
+
+  // comp legality (doc 02: ≥1 tank, ≥1 healer; doc 01: ≥3 players)
+  const roles = team.map(s => heroDef(s.id).role);
+  const compIssues = [];
+  if (team.length < C.minTeamSize) compIssues.push(`${team.length}/${C.minTeamSize} heroes — a battle needs 3`);
+  if (!roles.includes("tank")) compIssues.push("no tank");
+  if (!roles.includes("healer")) compIssues.push("no healer");
+  $("compCheck").className = "status " + (compIssues.length ? "warning" : "good");
+  $("compCheck").textContent = compIssues.length ? "⚠ " + compIssues.join(" · ") : "✓ legal team (≥3 players, tank + healer)";
+
+  // resolve HP
+  const derived = S.hpMode === "derive" ? deriveHp() : null;
+  const hp = derived ? derived.hp : S.hp;
+  if (derived) $("inHp").value = hp;
+  const res = simulate(hp);
+  const dpsInfo = steadyTeamDps();
+
+  // per-hero table
+  $("heroOut").querySelector("tbody").innerHTML = dpsInfo.per.map(p => {
+    const h = heroDef(p.slot.id), sl = slotsFor(p.slot);
+    const ceil = Math.max(...[0,1,2].map(i => ceilingCast(sl[i].base)), ceilingBasic(sl[4].base));
+    const ultD = maxUlt(p.slot);
+    // A healer's ultimate pays in healing, so quote the currency it actually pays.
+    const ultH = ((sl[3].heal || 0) + (sl[3].perMarkHeal || 0) * S.maxMarksConsumed) * (1 + C.maxAmp) * C.maxGear;
+    const ultCell = [
+      ultD > 1 ? fmt(ultD) : "",
+      ultH > 1 ? `<span style="color:${CURRENCY_COLOR.heal}">${fmt(ultH)}</span>` : "",
+    ].filter(Boolean).join(" / ") || "—";
+    return `<tr>
+      <td>${h.name} <span class="prov">${CONTRACT[groupOf(h)].label}</span></td>
+      <td class="num">${fmt(ceil)}</td>
+      <td class="num">${ultCell}</td>
+      <td class="num">${fmt(p.dps)}</td>
+      <td class="num" style="color:${p.hps > 0.5 ? CURRENCY_COLOR.heal : "var(--muted)"}">${p.hps > 0.5 ? fmt(p.hps) : "—"}</td>
+      <td class="num" style="color:${p.rot.focusPerS > S.focusRegen ? "var(--critical)" : "var(--ink-2)"}">${p.rot.focusPerS.toFixed(1)}</td>
+      <td class="num">${dpsInfo.total ? Math.round(p.dps / dpsInfo.total * 100) + "%" : "—"}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="7" style="color:var(--muted)">no heroes selected</td></tr>`;
+
+  // worked-example parity check (doc 02: Freud Superego, 6 Marks, 20% Amp, BiS, match = 493)
+  const wx = 180 * 1.5 * (1 + 0.36) * 1.2 * 1.12 * 1.0;
+  $("workedExample").innerHTML =
+    `Doc 02 worked-example parity: 180 × 1.5 × 1.36 × 1.20 × 1.12 × 1.0 = <b>${wx.toFixed(1)}</b> ${Math.abs(wx - 493) < 1 ? '<span class="status good">✓ matches doc (493, truncated)</span>' : '<span class="status critical">✕ drift!</span>'} — the sheet computes with the same pipeline as <code>shared/combat.ts</code>.`;
+
+  renderDistribution();
+  renderSlots(dpsInfo);
+  renderBuffs(res, dpsInfo);
+  renderHeroHp(dpsInfo);
+  $("simDiffLabel").innerHTML =
+    `<b>${esc(diff().name)}</b> difficulty · ${team.length} players · gear ×${S.gear.toFixed(2)} · target ${mmss(S.killTarget)} of ${mmss(S.enrage)}`;
+
+  // tiles
+  const enrageOk = res.killTime !== null;
+  const margin = enrageOk ? S.enrage - res.killTime : 0;
+  const p3net = fortressNet(res, hp);
+  const worstIn = Math.max(0, ...res.perPhase.map(l => l.dur > 0 ? l.incoming / l.dur : 0));
+  const markSat = dpsInfo.steadyMarks / C.maxMarks;
+  $("tiles").innerHTML =
+    tile("Kill time", enrageOk ? mmss(res.killTime) : "no kill",
+      enrageOk ? `enrage ${mmss(S.enrage)} · margin ${mmss(margin)}` : `${(res.remaining * 100).toFixed(1)}% HP left at enrage`,
+      enrageOk
+        ? (margin < S.enrage * 0.08 ? { cls: "warning", icon: "⚠", text: "tight vs enrage" } : { cls: "good", icon: "✓", text: "beats enrage" })
+        : { cls: "critical", icon: "✕", text: "enrage wipe" }) +
+    tile("Boss HP " + (S.hpMode === "derive" ? "(derived)" : ""), derived && derived.degenerate ? "n/a" : fmt(hp),
+      derived
+        ? (derived.degenerate
+          ? `kill time barely depends on HP — the %-based debuff dominates; lower its DoT or duration`
+          : `for a ${mmss(S.killTarget)} kill at ${team.length} players`)
+        : `fixed input`,
+      derived && derived.degenerate ? { cls: "warning", icon: "⚠", text: "degenerate config" } : null) +
+    tile("Team DPS (steady)", fmt(dpsInfo.total), `${team.length} players · ${dpsInfo.steadyMarks.toFixed(1)} Marks · ${Math.round(S.amp * 100)}% Amp`) +
+    (p3net !== null ? tile("Fortress net HP/s", (p3net >= 0 ? "+" : "") + p3net.toFixed(2) + "%",
+      "P3: regen minus damage through armor+debuff",
+      p3net < -0.05 ? { cls: "good", icon: "✓", text: "debuff out-damages regen" }
+        : p3net < 0 ? { cls: "warning", icon: "⚠", text: "barely draining" }
+        : { cls: "critical", icon: "✕", text: "boss heals through P3" }) : "") +
+    tile("Mark saturation", Math.round(markSat * 100) + "%",
+      `steady board ${dpsInfo.steadyMarks.toFixed(1)} / ${C.maxMarks} · ${res.ultCasts} ults cast`,
+      markSat >= 0.99 ? { cls: "warning", icon: "⚠", text: "board pinned — ults compete (P-3)" } : { cls: "good", icon: "✓", text: "headroom on the board" }) +
+    tile("Worst-phase incoming", fmt(worstIn) + " /s",
+      "required HPS to break even — no healer HPS numbers exist in canon yet") +
+    (() => {
+      const i = fortressIndex();
+      if (i < 0) return "";
+      const perPass = S.phases[i].regen * S.phases[i].dur;
+      const slotTot = [1,2,3,4,5].reduce((a, n) => a + res.src[n], 0);
+      const dShare = res.src.debuff / (slotTot + res.src.debuff || 1);
+      return tile("Armored-phase burden", Math.round(perPass * 100) + "% / pass",
+        `boss self-heals that much of its max HP each Fortress pass · the counter-debuff is ${(dShare * 100).toFixed(0)}% of all damage dealt`,
+        perPass > 0.25
+          ? { cls: "critical", icon: "✕", text: "regen dwarfs every hero kit" }
+          : dShare > 0.5
+            ? { cls: "warning", icon: "⚠", text: "the debuff carries the fight" }
+            : { cls: "good", icon: "✓", text: "hero kits still decide it" });
+    })();
+
+  // damage breakdown by slot
+  const total = [1,2,3,4,5].reduce((a, n) => a + res.src[n], 0) + res.src.debuff || 1;
+  const segs = [
+    ["S1 palette (1–x)", res.src[1], SLOT_COLOR[1]],
+    ["S2 defense (E)", res.src[2], SLOT_COLOR[2]],
+    ["S3 chain (R)", res.src[3], SLOT_COLOR[3]],
+    ["S4 ultimate (F)", res.src[4], SLOT_COLOR[4]],
+    ["S5 basic (LMB)", res.src[5], SLOT_COLOR[5]],
+    ["P2 debuff", res.src.debuff, SLOT_COLOR.debuff],
+  ];
+  $("stack").innerHTML = segs.map(([n, v, c]) => {
+    const p = v / total * 100;
+    return `<div class="seg" style="flex:${Math.max(p, 0.001)} 0 0;background:${c}" title="${esc(n)}: ${fmt(v)} (${p.toFixed(1)}%)">${p > 8 ? p.toFixed(0) + "%" : ""}</div>`;
+  }).join("");
+  $("stackLegend").innerHTML = segs.map(([n, v, c]) =>
+    `<span><span class="chip" style="background:${c}"></span>${esc(n)} · ${fmt(v)} (${(v / total * 100).toFixed(1)}%)</span>`).join("");
+
+  // per-phase ledger
+  $("phaseOut").querySelector("tbody").innerHTML = S.phases.map((p, i) => {
+    const l = res.perPhase[i];
+    if (l.dur < 0.05) return "";
+    const net = (l.regen - l.dealt) / l.dur;
+    return `<tr><td>${esc(p.name)}</td><td class="num">${fmt(l.dur)}</td><td class="num">${fmt(l.dealt)}</td>
+      <td class="num">${fmt(l.regen)}</td><td class="num">${fmt(l.incoming)}</td>
+      <td class="num">${fmt(l.dur ? l.incoming / l.dur : 0)}</td>
+      <td class="num" style="color:${net < 0 ? "var(--good)" : "var(--critical)"}">${net >= 0 ? "+" : ""}${(net / hp * 100).toFixed(2)}%</td></tr>`;
+  }).join("");
+
+  renderChart(res);
+  $("simTable").querySelector("tbody").innerHTML = res.samples.filter((_, i) => i % 20 === 0)
+    .map(s => `<tr><td>${mmss(s.t)}</td><td>${esc(s.phase)}</td><td class="num">${(s.hp * 100).toFixed(1)}</td><td class="num">${s.marks.toFixed(1)}</td><td class="num">${fmt(s.dps)}</td></tr>`).join("");
+
+  // Heavy passes (HP-by-team-size + the optimizer) run off the input thread so
+  // dragging a slider stays responsive.
+  clearTimeout(suggTimer);
+  $("suggStatus").textContent = "solving…";
+  suggTimer = setTimeout(() => heavyPass(hp, res, dpsInfo), 120);
+
+  window.__last = { hp, res, dpsInfo, derived };
+}
+
+/** difficulty matrix + hpByTeamSize + optimizer + export payload. */
+function heavyPass(hp, res, dpsInfo) {
+  const matrix = difficultyMatrix();
+  matrixCache = matrix;
+  renderDifficulties(matrix);
+  renderMatrix(matrix);
+
+  const sizes = [3, 4, 5].map(n => {
+    if (S.team.slice(0, n).filter(s => s.id).length < n) return { n, ok: false };
+    const d = withState({ teamSize: n }, () => ({
+      hp: deriveHp(), dps: steadyTeamDps().total,
+      roles: S.team.slice(0, n).map(s => heroDef(s.id).role),
+    }));
+    return { n, ok: true, hp: d.hp.hp, degenerate: d.hp.degenerate, dps: d.dps, roles: d.roles };
+  });
+  $("sizeTable").querySelector("tbody").innerHTML = sizes.map(s => {
+    if (!s.ok) return `<tr><td>${s.n}</td><td colspan="4" style="color:var(--muted)">fill slot ${s.n} to compute</td></tr>`;
+    const legal = s.roles.includes("tank") && s.roles.includes("healer");
+    return `<tr${s.n === S.teamSize ? ' style="color:var(--ink)"' : ' style="color:var(--ink-2)"'}>
+      <td>${s.n}${s.n === S.teamSize ? " ← current" : ""}</td>
+      <td class="num">${fmt(s.dps)}</td>
+      <td class="num">${s.degenerate ? "n/a" : fmt(s.hp)}</td>
+      <td class="num">${s.degenerate ? "—" : fmt(s.hp / s.n)}</td>
+      <td>${legal ? '<span class="status good">✓ tank+healer</span>' : '<span class="status warning">⚠ illegal comp</span>'}</td>
+    </tr>`;
+  }).join("");
+
+  suggestions = buildSuggestions(hp, res, dpsInfo);
+  const changed = suggestions.filter(s => s.changed && s.apply);
+  const advisories = suggestions.filter(s => s.changed && !s.apply);
+  $("suggTable").querySelector("tbody").innerHTML = suggestions.map((s, i) => `<tr>
+    <td>${esc(s.label)}</td>
+    <td class="num">${esc(String(s.cur))}</td>
+    <td class="num ${s.changed ? "delta up" : ""}">${esc(String(s.sug))}</td>
+    <td class="why">${esc(s.why)}</td>
+    <td>${s.apply ? `<button class="mini" data-sugg="${i}"${s.changed ? "" : " disabled"}>apply</button>` : ""}</td>
+  </tr>`).join("");
+  $("suggTable").querySelectorAll("button[data-sugg]").forEach(b => b.addEventListener("click", e => {
+    const s = suggestions[+e.target.dataset.sugg];
+    if (s && s.apply) { s.apply(); syncInputs(); recompute(); }
+  }));
+  $("suggStatus").textContent =
+    (changed.length
+      ? `${changed.length} of ${suggestions.length} parameters differ from the recommendation`
+      : `✓ every tunable parameter is already at its recommended value`) +
+    (advisories.length ? ` · ${advisories.length} advisory row${advisories.length > 1 ? "s" : ""} need a design call, not a click` : "");
+  $("btnApplyAll").disabled = changed.length === 0;
+
+  buildExport(hp, res, dpsInfo, sizes, matrix);
+  $("jsonPreview").textContent = JSON.stringify(lastExport, null, 2);
+}
+
+/* ============================== EXPORT ============================== */
+function buildExport(hp, res, dpsInfo, sizes, matrix) {
+  const team = activeTeam();
+  const total = [1,2,3,4,5].reduce((a, n) => a + res.src[n], 0) + res.src.debuff || 1;
+  // The shipped HP curve comes from the SELECTED TIER's matrix row (derived at
+  // its reference corner), never from the live editor's knobs — the live sim
+  // can sit at any gear/target the designer is exploring, and exporting that
+  // once shipped a Standard curve with full BiS silently baked in.
+  const tierRow = (matrix || []).find(m => m.id === S.difficulty);
+  const hpByTeamSize = {};
+  if (tierRow) for (const n of [3, 4, 5]) {
+    if (tierRow.hpBySize[n] != null) hpByTeamSize[n] = Math.round(tierRow.hpBySize[n]);
+  }
+  const refRate = refRates();
+
+  lastExport = {
+    schema: "psyrena.boss-math/v3",
+    exportedAt: new Date().toISOString(),
+    note: "Boss-math design sheet export. Self-contained: constants, glossary, the three difficulty tiers with their derived HP curves and the 4-corner clear matrix, the hero DPS budget and its skill distribution (with the derived per-skill base damage for all 14 heroes), player buff/coverage assumptions, the full hero roster and resolved slot tables, boss phase script, the full simulation result, the optimizer's suggestions, and a serverPatch block shaped like shared/types.ts BossPhaseScript with one HP curve per difficulty. prov: code = shipped, doc = design canon, design = this sheet proposes it.",
+
+    constants: C,
+    optimizerTargets: TARGET,
+
+    difficulties: {
+      _note: "Same phase script, three tiers. HP is derived per tier at that tier's reference gear; the other three multipliers are design knobs. Corners weaker than a tier's reference are expected to fall short — that is what the tier means.",
+      corners: CORNERS,
+      tiers: (matrix || []).map(m => {
+        const d = S.difficulties.find(x => x.id === m.id);
+        return {
+          id: m.id, name: m.name,
+          tunedForCorner: m.ref,
+          bossDamageMult: d.dmgMult, regenMult: d.regenMult, answerWindowMult: d.windowMult,
+          hpByTeamSize: { 3: m.hpBySize[3], 5: m.hpBySize[5] },
+          clearMatrix: m.cells.map(c => ({
+            corner: c.corner,
+            teamSize: cornerDef(c.corner).team,
+            gear: cornerDef(c.corner).gear,
+            isTuningTarget: !!c.isRef,
+            clears: c.ok ? c.killTime !== null : null,
+            killTimeS: c.ok ? c.killTime : null,
+            hpRemainingAtEnrage: c.ok && c.killTime === null ? c.remaining : 0,
+            requiredHpsWorstPhase: c.ok ? c.requiredHps : null,
+          })),
+        };
+      }),
+    },
+
+    buffs: (() => {
+      const km = kitMitigation(team);
+      const totalDur = res.perPhase.reduce((a, l) => a + l.dur, 0) || 1;
+      return {
+        _note: "Team-applied buffs, quoted with the coverage that makes them honest. Attack buffs are the doc-03 Power/success buffs and sit OUTSIDE the Amp term; mitigation is the defensive-cooldown side and only affects incoming damage.",
+        attack: { magnitude: S.buffs.atkMag, coverage: S.buffs.atkCov, effectiveMultiplier: atkMult() },
+        mitigation: {
+          source: S.useKitMitigation ? "kits" : "manual",
+          cap: C.maxMitigation,
+          rawFromKits: km.raw,
+          applied: mitigationValue(),
+          effectiveIncomingMultiplier: defMult(),
+          manual: { magnitude: S.buffs.defMag, coverage: S.buffs.defCov },
+          sources: km.parts,
+        },
+        healing: {
+          supplyPerS: dpsInfo.healTotal,
+          demandWorstPhasePerS: Math.max(0, ...res.perPhase.map(l => l.dur > 0 ? l.incoming / l.dur : 0)),
+          demandAveragePerS: res.perPhase.reduce((a, l) => a + l.incoming, 0) / totalDur,
+          surplusToAmpPerS: Math.max(0, dpsInfo.healTotal - res.perPhase.reduce((a, l) => a + l.incoming, 0) / totalDur),
+          // doc 02: 1000 overheal = +1% Amp for 5 s → sustained Amp is the
+          // overheal banked inside one window.
+          impliedAmpFromOverheal: Math.max(0, dpsInfo.healTotal - res.perPhase.reduce((a, l) => a + l.incoming, 0) / totalDur)
+            * C.overhealAmpWindowS / C.overhealPerAmpPercent / 100,
+          ampSliderAssumes: S.amp,
+        },
+      };
+    })(),
+
+    heroHp: (() => {
+      const hp = heroHpDesign();
+      const pool = team.reduce((a, s) => a + hp.byGroup[groupOf(heroDef(s.id))], 0);
+      return {
+        _note: "DERIVED, not canon. doc 02 lists the HP stat with no values anywhere; these are solved from the boss's outgoing damage under two constraints — an unhealed player survives ttlTargetS seconds of the worst stream, and no single hit exceeds maxHitPct of a bar. HP is an output of the fight's shape and feeds nothing in the damage sim.",
+        design: JSON.parse(JSON.stringify(S.hpDesign)),
+        referenceHp: hp.refHp,
+        bindingConstraint: hp.binding,
+        byRoleGroup: hp.byGroup,
+        perHero: HEROES.map(h => ({ id: h.id, name: h.name, role: h.role, roleGroup: groupOf(h), hp: hp.byGroup[groupOf(h)] })),
+        worstStreamPerTargetPerS: hp.worstPerTarget,
+        worstAoePerPlayerPerS: hp.worstAoe,
+        worstStreamPhase: hp.worstPhase,
+        biggestSingleHit: hp.biggestHit,
+        mitigationApplied: hp.mitigation,
+        teamHpPool: pool,
+        secondsToRefillPoolFromZero: dpsInfo.healTotal > 0 ? pool / dpsInfo.healTotal : null,
+      };
+    })(),
+
+    roleContract: {
+      _note: "doc 08 — per-role output-budget shares and the currency each slot pays in. `contract` is the live (possibly edited) copy; `published` is doc 08 as written, so drift is visible.",
+      published: CONTRACT,
+      contract: JSON.parse(JSON.stringify(S.contract)),
+      roleGroupOfRole: ROLE_GROUP,
+      mitigationCap: C.maxMitigation,
+    },
+
+    skillBudget: {
+      _note: "Design the total, derive the skills. Bases are quoted at reference conditions (no Marks, no Amp, no gear, match format) and at a reference execution (perfect accuracy, half the casts on the payoff beat).",
+      mode: S.baseMode,
+      budgetDpsForBase100Hero: S.budgetDps,
+      referenceExecution: REF_EXEC,
+      paletteSubSkills: S.paletteN,
+      subSkillAccuracyMultiplier: subSkillAccMult(),
+      ultimateDirectShare: S.ultDirectShare,
+      distributionByRole: Object.fromEntries(ROLE_GROUPS.map(g => [g, {
+        label: CONTRACT[g].label,
+        slots: SLOT_META.map(m => ({
+          n: m.n, key: m.key, kind: m.kind,
+          shareEntered: S.contract[g].mix[m.n], shareNormalised: mixShares(g)[m.n],
+          currency: currencyOf(g, m.n),
+          castsPerMin: refRate[m.n] * 60,
+          focusCost: C.focusCost["s" + m.n],
+        })),
+        mitigation: S.contract[g].mitigation,
+      }])),
+      perHero: HEROES.map(h => {
+        const g = groupOf(h), b = budgetBases(roleWeight(h), g);
+        return {
+          id: h.id, name: h.name, role: h.role, roleGroup: g, weight: roleWeight(h),
+          totalBudget: b.totalDps,
+          outputPerS: { damage: b.dpsDamage, healing: b.hpsHealing, teamBuff: b.buffValue },
+          s1: { dmg: b.dmg[1], heal: b.heal[1], buff: b.buff[1] },
+          s2: { dmg: b.dmg[2], heal: b.heal[2], buff: b.buff[2] },
+          s3: { dmg: b.dmg[3], heal: b.heal[3], buff: b.buff[3] },
+          s4: { directDmg: b.dmg[4], directHeal: b.heal[4], perMarkDmg: b.perMark, perMarkHeal: b.perMarkHeal },
+          s5: { dmg: b.dmg[5], heal: b.heal[5], buff: b.buff[5] },
+          canon: { s1: h.s1.dmg ?? null, perMark: h.s4.perMark ?? null },
+          drift: {
+            s1: h.s1.dmg ? b.dmg[1] / h.s1.dmg - 1 : null,
+            perMark: h.s4.perMark && b.perMark > 0 ? b.perMark / h.s4.perMark - 1 : null,
+          },
+        };
+      }),
+    },
+
+    glossary: Object.fromEntries(Object.entries(GLOSSARY).map(([k, g]) => [k, { term: g.t, plain: g.plain, numbers: g.math || null }])),
+
+    settings: {
+      format: S.format, beatApplesToSkills: S.beatRule, gear: S.gear, amp: S.amp,
+      paletteWindowS: S.windowS, ultFiresAtMarks: S.ultAt, maxMarksConsumed: S.maxMarksConsumed,
+      focusRegenPerS: S.focusRegen, teamSize: S.teamSize,
+      difficulty: S.difficulty,
+      difficultyTiers: JSON.parse(JSON.stringify(S.difficulties)),
+      buffs: JSON.parse(JSON.stringify(S.buffs)),
+      baseMode: S.baseMode, budgetDps: S.budgetDps, paletteSubSkills: S.paletteN,
+      accuracyCostPerExtraSubSkill: S.accPerExtraSubSkill, ultimateDirectShare: S.ultDirectShare,
+      roleContract: JSON.parse(JSON.stringify(S.contract)),
+      useKitMitigation: S.useKitMitigation,
+      hpDesign: JSON.parse(JSON.stringify(S.hpDesign)),
+      slotCoefficients: JSON.parse(JSON.stringify(S.coef)),
+      slotCooldownsS: JSON.parse(JSON.stringify(S.cd)),
+      slotOverrides: JSON.parse(JSON.stringify(S.slotOverrides)),
+      boss: S.boss, enrageS: S.enrage, killTargetS: S.killTarget,
+      hpMode: S.hpMode, fixedHp: S.hp,
+      phases: JSON.parse(JSON.stringify(S.phases)),
+      p2CheckSuccess: S.p2Success, debuffDotPctMaxHpPerStack: S.dotPctPerStack,
+      debuffDurationS: S.dotDurS, debuffTicksOnlyWhileArmored: S.dotArmorOnly,
+      team: JSON.parse(JSON.stringify(S.team)),
+      minTeamSize: C.minTeamSize,
+    },
+
+    roster: HEROES.map(h => ({
+      id: h.id, name: h.name, role: h.role, kit: h.kit, basicBase: h.base, prov: h.prov,
+      borrowFactor: h.borrow ?? null,
+      slots: SLOT_META.map(m => ({
+        n: m.n, key: m.key, kind: m.kind,
+        name: (h["s" + m.n] || {}).name ?? "Basic attack",
+        canonDamage: m.n === 5 ? h.base : (h["s" + m.n] || {}).dmg ?? null,
+        perMark: m.n === 4 ? h.s4.perMark : null,
+        bypassesArmor: m.n === 4 ? !!h.s4.bypass : false,
+        prov: m.n === 5 ? "code" : (h["s" + m.n] || {}).prov ?? "design",
+      })),
+    })),
+
+    resolvedTeam: team.map((slot, i) => {
+      const h = heroDef(slot.id), sl = slotsFor(slot), info = dpsInfo.per[i];
+      const sb = skillBeat(slot.payoff), pen = fixPenalty(slot), pipe = dpsInfo.pipe;
+      return {
+        seat: i + 1, id: h.id, name: h.name, role: h.role, kit: h.kit,
+        execution: { accuracy: slot.acc, payoffRate: slot.payoff, uptime: slot.uptime, foreignMarkShare: slot.foreign },
+        fixationPenalty: pen,
+        focusPerS: info.rot.focusPerS,
+        markRatePerS: info.rot.markRate,
+        sustainedDps: info.dps,
+        maxUltimate: maxUlt(slot),
+        slots: SLOT_META.map(m => {
+          const d = sl[m.n - 1];
+          let perCastNow, ceiling, dps, castsPerMin;
+          if (m.n === 4) {
+            perCastNow = ultDamage(slot, Math.min(S.ultAt, Math.max(1, dpsInfo.steadyMarks)), S.amp).dmg;
+            ceiling = maxUlt(slot); dps = info.ultAvg; castsPerMin = 60 / d.cdS;
+          } else if (m.n === 5) {
+            perCastNow = d.base * C.avgBeat * pipe * pen; ceiling = ceilingBasic(d.base);
+            dps = info.rot.dmg[5] * pipe; castsPerMin = info.rot.rates[5] * 60;
+          } else {
+            perCastNow = d.base * sb * pipe * pen; ceiling = ceilingCast(d.base);
+            dps = info.rot.dmg[m.n] * pipe;
+            castsPerMin = (m.n === 1 ? info.rot.attempts1 : info.rot.rates[m.n]) * 60;
+          }
+          return {
+            n: m.n, key: m.key, kind: m.kind, name: d.name, prov: d.prov,
+            base: d.base, perMark: d.perMark ?? null, cooldownS: d.cdS, focusCost: d.focus,
+            castsPerMin, damagePerCastNow: perCastNow, damagePerCastCeiling: ceiling, dps,
+          };
+        }),
+      };
+    }),
+
+    results: {
+      bossHp: hp,
+      hpDerived: S.hpMode === "derive",
+      killTimeS: res.killTime,
+      enrageS: S.enrage,
+      marginS: res.killTime === null ? null : S.enrage - res.killTime,
+      hpRemainingAtEnrage: res.killTime === null ? res.remaining : 0,
+      teamDps: dpsInfo.total,
+      steadyMarks: dpsInfo.steadyMarks,
+      ultimateCasts: res.ultCasts,
+      fortressNetPctMaxHpPerS: fortressNet(res, hp),
+      armoredPassHealFraction: fortressIndex() >= 0
+        ? S.phases[fortressIndex()].regen * S.phases[fortressIndex()].dur : null,
+      damageBySlot: {
+        s1_palette: res.src[1], s2_defense: res.src[2], s3_chain: res.src[3],
+        s4_ultimate: res.src[4], s5_basic: res.src[5], p2_debuff: res.src.debuff,
+      },
+      damageShareBySlot: {
+        s1_palette: res.src[1] / total, s2_defense: res.src[2] / total, s3_chain: res.src[3] / total,
+        s4_ultimate: res.src[4] / total, s5_basic: res.src[5] / total, p2_debuff: res.src.debuff / total,
+      },
+      perPhase: S.phases.map((p, i) => {
+        const l = res.perPhase[i];
+        return {
+          name: p.name, activeS: l.dur, damageDealt: l.dealt, bossRegen: l.regen,
+          incomingRaidDamage: l.incoming, requiredHps: l.dur ? l.incoming / l.dur : 0,
+          netBossHpPerS: l.dur ? (l.regen - l.dealt) / l.dur : 0,
+        };
+      }),
+      samples: res.samples.map(s => ({ t: +s.t.toFixed(1), hpFraction: +s.hp.toFixed(4), phase: s.phase, dps: Math.round(s.dps), marks: +s.marks.toFixed(2) })),
+    },
+
+    suggestions: suggestions.map(s => ({ id: s.id, parameter: s.label, current: String(s.cur), suggested: String(s.sug), rationale: s.why, differsFromCurrent: !!s.changed })),
+
+    serverPatch: {
+      _note: "Drop-in shape for shared/types.ts BossPhaseScript, extended with one HP curve per difficulty. hpByTeamSize is the open P-2 field; values are simulated, not guessed. hpByTeamSize below is the selected tier's curve derived at its reference corner — identical to that tier's difficultyTiers entry, never the live editor's knobs; difficultyTiers carries all three.",
+      bossId: S.boss,
+      displayName: (BOSSES[S.boss] || {}).name ?? "Custom",
+      enrageMs: S.enrage * 1000,
+      difficulty: S.difficulty,
+      hpByTeamSize,
+      difficultyTiers: (matrix || []).map(m => {
+        const d = S.difficulties.find(x => x.id === m.id);
+        return {
+          id: m.id, displayName: m.name,
+          hpByTeamSize: { 3: m.hpBySize[3], 4: m.hpBySize[4] ?? null, 5: m.hpBySize[5] },
+          outgoingDamageMult: d.dmgMult, regenMult: d.regenMult, answerWindowMult: d.windowMult,
+          tunedForCorner: m.ref,
+        };
+      }),
+      phases: S.phases.map((p, i) => ({
+        id: `${S.boss}.p${i + 1}`, name: p.name, durationMs: p.dur * 1000,
+        windowMs: S.windowS * 1000, dmgTakenMult: p.taken, regenPctPerS: p.regen,
+        outgoing: p.per > 0 ? { hitDamage: p.hit, periodS: p.per, targets: p.aoe ? "all" : "one" } : null,
+        skillCheck: !!p.skillCheck,
+      })),
+      p2Debuff: {
+        dotPctMaxHpPerStackPerS: S.dotPctPerStack,
+        durationMs: S.dotDurS * 1000,
+        stacksPerPass: 5,
+        bypassesArmor: true,
+        ticksOnlyWhileArmored: S.dotArmorOnly,
+        prov: "design — TBD in doc 04, this sheet's proposal",
+      },
+      combatOverrides: {
+        BEAT_APPLIES_TO_SKILLS: S.beatRule,
+        maxMarksConsumed: S.maxMarksConsumed,
+        focusRegenPerS: S.focusRegen,
+        slotCooldownsS: { s2_defense: S.cd.s2, s3_chain: S.cd.s3, s4_ultimate: S.cd.s4 },
+        slotFocusCosts: C.focusCost,
+      },
+    },
+
+    openIssues: [
+      { id: "P-1", title: "Beat term contradicts itself", impact: "±47% on every off-beat skill cast", exposedAs: "settings.beatApplesToSkills" },
+      { id: "P-2", title: "Boss HP vs team size never specified", impact: "hpByTeamSize is required with no values", exposedAs: "serverPatch.hpByTeamSize" },
+      { id: "P-3", title: "Several ultimates, one 10-Mark pool", impact: "who gets to cash out", exposedAs: "settings.maxMarksConsumed / ultFiresAtMarks" },
+      { id: "P-4", title: "'≥3 allies' gates unclearable at the 3-player minimum", impact: "Maslow/Burnout/Triad checks", exposedAs: "settings.teamSize" },
+      { id: "S-1", title: "Amp pins its cap", impact: "modeled as a steady-state slider", exposedAs: "settings.amp" },
+      { id: "gap", title: "No hero HP and no healer throughput anywhere in the repo", impact: "survival math is demand-only", exposedAs: "results.perPhase[].requiredHps" },
+    ],
+  };
+}
+
+/* =============================== WIRING =============================== */
+function bind(id, fn) { $(id).addEventListener("input", fn); $(id).addEventListener("change", fn); }
+bind("inFormat", e => { S.format = e.target.value; recompute(); });
+bind("inBeatRule", e => { S.beatRule = e.target.checked; recompute(); });
+bind("inGear", e => { S.gear = +e.target.value; $("outGear").textContent = "×" + S.gear.toFixed(2); recompute(); });
+bind("inAmp", e => { S.amp = +e.target.value / 100; $("outAmp").textContent = e.target.value + "%"; recompute(); });
+bind("inWindow", e => { S.windowS = +e.target.value; recompute(); });
+bind("inUltAt", e => { S.ultAt = +e.target.value; recompute(); });
+bind("inMaxConsumed", e => { S.maxMarksConsumed = +e.target.value; recompute(); });
+bind("inFocusRegen", e => { S.focusRegen = +e.target.value; recompute(); });
+bind("inTeamSize", e => { S.teamSize = Math.max(C.minTeamSize, Math.min(C.maxTeamSize, +e.target.value)); recompute(true); });
+bind("inDiff", e => {
+  S.difficulty = e.target.value;
+  S.killTarget = Math.round(S.enrage * diff().killFrac); // the tier owns the target
+  S.gear = cornerDef(diff().ref).gear;                   // …and its reference corner owns the gear
+  syncInputs(); recompute();
+});
+bind("inBaseMode", e => { S.baseMode = e.target.value; recompute(); });
+bind("inBudget", e => { S.budgetDps = +e.target.value; recompute(); });
+bind("inPaletteN", e => { S.paletteN = Math.max(3, Math.min(8, +e.target.value)); recompute(); });
+bind("inAtkMag", e => { S.buffs.atkMag = +e.target.value / 100; $("outAtkMag").textContent = "+" + e.target.value + "%"; recompute(); });
+bind("inAtkCov", e => { S.buffs.atkCov = +e.target.value / 100; $("outAtkCov").textContent = e.target.value + "%"; recompute(); });
+bind("inUseKitMit", e => { S.useKitMitigation = e.target.checked; recompute(); });
+bind("inTtl", e => { S.hpDesign.ttlTargetS = +e.target.value; recompute(); });
+bind("inMaxHit", e => { S.hpDesign.maxHitPct = +e.target.value / 100; recompute(); });
+bind("inHpTank", e => { S.hpDesign.weights.tank = +e.target.value; recompute(); });
+bind("inHpSupport", e => { S.hpDesign.weights.support = +e.target.value; recompute(); });
+bind("inHpHealer", e => { S.hpDesign.weights.healer = +e.target.value; recompute(); });
+bind("inDefMag", e => { S.buffs.defMag = +e.target.value / 100; $("outDefMag").textContent = e.target.value + "%"; recompute(); });
+bind("inDefCov", e => { S.buffs.defCov = +e.target.value / 100; $("outDefCov").textContent = e.target.value + "%"; recompute(); });
+bind("inCd2", e => { S.cd.s2 = +e.target.value; recompute(); });
+bind("inCd3", e => { S.cd.s3 = +e.target.value; recompute(); });
+bind("inCd4", e => { S.cd.s4 = +e.target.value; recompute(); });
+bind("inEnrage", e => {
+  S.enrage = +e.target.value;
+  S.killTarget = Math.round(S.enrage * diff().killFrac); // targets are tier fractions
+  syncInputs(); recompute();
+});
+bind("inKillTarget", e => {
+  S.killTarget = +e.target.value;
+  diff().killFrac = Math.max(0.3, Math.min(1, S.killTarget / S.enrage)); // write back to the tier
+  recompute();
+});
+bind("inHp", e => { S.hp = +e.target.value; if (S.hpMode === "fixed") recompute(); });
+bind("hpDerive", () => { S.hpMode = "derive"; recompute(); });
+bind("hpFixed", () => { S.hpMode = "fixed"; recompute(); });
+bind("inP2", e => { S.p2Success = +e.target.value / 100; $("outP2").textContent = e.target.value + "%"; recompute(); });
+bind("inDot", e => { S.dotPctPerStack = +e.target.value; recompute(); });
+bind("inDotDur", e => { S.dotDurS = +e.target.value; recompute(); });
+bind("inDotArmorOnly", e => { S.dotArmorOnly = e.target.checked; recompute(); });
+bind("inBoss", e => {
+  S.boss = e.target.value;
+  if (BOSSES[S.boss]) {
+    const b = BOSSES[S.boss];
+    S.phases = JSON.parse(JSON.stringify(b.phases));
+    S.enrage = b.enrage;
+    S.killTarget = Math.round(S.enrage * diff().killFrac);
+    $("inEnrage").value = b.enrage; $("inKillTarget").value = S.killTarget;
+  }
+  renderPhases(); recompute();
+});
+$("btnAddPhase").addEventListener("click", () => {
+  S.phases.push({ name: `Phase ${S.phases.length + 1}`, dur: 45, taken: 1, regen: 0, hit: 0, per: 0, aoe: false });
+  S.boss = "custom"; $("inBoss").value = "custom";
+  renderPhases(); recompute();
+});
+$("btnResetSlots").addEventListener("click", () => { S.slotOverrides = {}; recompute(); });
+$("btnRestoreContract").addEventListener("click", () => {
+  S.contract = JSON.parse(JSON.stringify(CONTRACT));
+  recompute();
+});
+/** One synchronous solve pass — used by Apply-all to iterate to a fixed point. */
+function solveOnce() {
+  const hp = S.hpMode === "derive" ? deriveHp().hp : S.hp;
+  const res = simulate(hp);
+  return buildSuggestions(hp, res, steadyTeamDps());
+}
+$("btnApplyAll").addEventListener("click", () => {
+  // Suggestions interact (changing the ult coefficient moves the damage mix,
+  // which moves the debuff solve), so iterate until nothing moves — bounded.
+  let list = suggestions;
+  for (let round = 0; round < 5; round++) {
+    const changed = list.filter(s => s.changed && s.apply);
+    if (!changed.length) break;
+    for (const s of changed) s.apply();
+    list = solveOnce();
+  }
+  syncInputs(); recompute();
+});
+
+/** Push state back into every control (after import or apply-all). */
+function syncInputs() {
+  $("inFormat").value = S.format; $("inBeatRule").checked = S.beatRule;
+  $("inGear").value = S.gear; $("outGear").textContent = "×" + (+S.gear).toFixed(2);
+  $("inAmp").value = Math.round(S.amp * 100); $("outAmp").textContent = Math.round(S.amp * 100) + "%";
+  $("inWindow").value = S.windowS; $("inUltAt").value = S.ultAt;
+  $("inMaxConsumed").value = S.maxMarksConsumed; $("inFocusRegen").value = S.focusRegen;
+  $("inTeamSize").value = S.teamSize;
+  $("inDiff").value = S.difficulty;
+  $("inBaseMode").value = S.baseMode; $("inBudget").value = S.budgetDps; $("inPaletteN").value = S.paletteN;
+  $("inAtkMag").value = Math.round(S.buffs.atkMag * 100); $("outAtkMag").textContent = "+" + Math.round(S.buffs.atkMag * 100) + "%";
+  $("inAtkCov").value = Math.round(S.buffs.atkCov * 100); $("outAtkCov").textContent = Math.round(S.buffs.atkCov * 100) + "%";
+  $("inUseKitMit").checked = S.useKitMitigation;
+  $("inTtl").value = S.hpDesign.ttlTargetS; $("inMaxHit").value = Math.round(S.hpDesign.maxHitPct * 100);
+  $("inHpTank").value = S.hpDesign.weights.tank; $("inHpSupport").value = S.hpDesign.weights.support;
+  $("inHpHealer").value = S.hpDesign.weights.healer;
+  $("inDefMag").value = Math.round(S.buffs.defMag * 100); $("outDefMag").textContent = Math.round(S.buffs.defMag * 100) + "%";
+  $("inDefCov").value = Math.round(S.buffs.defCov * 100); $("outDefCov").textContent = Math.round(S.buffs.defCov * 100) + "%";
+  $("inCd2").value = S.cd.s2; $("inCd3").value = S.cd.s3; $("inCd4").value = S.cd.s4;
+  $("inBoss").value = S.boss; $("inEnrage").value = S.enrage; $("inKillTarget").value = S.killTarget;
+  $("inHp").value = S.hp; $("hp" + (S.hpMode === "derive" ? "Derive" : "Fixed")).checked = true;
+  $("inP2").value = Math.round(S.p2Success * 100); $("outP2").textContent = Math.round(S.p2Success * 100) + "%";
+  $("inDot").value = S.dotPctPerStack; $("inDotDur").value = S.dotDurS;
+  $("inDotArmorOnly").checked = S.dotArmorOnly;
+}
+
+function download(json) {
+  const blob = new Blob([JSON.stringify(json, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `psyrena-boss-math-${S.boss}-${S.teamSize}p.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+$("btnExport").addEventListener("click", () => {
+  if (!lastExport) return;
+  lastExport.exportedAt = new Date().toISOString();
+  download(lastExport);
+});
+$("btnCopy").addEventListener("click", async () => {
+  if (!lastExport) return;
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(lastExport, null, 2));
+    $("btnCopy").textContent = "Copied ✓";
+    setTimeout(() => ($("btnCopy").textContent = "Copy JSON"), 1400);
+  } catch { $("exportPreview").open = true; }
+});
+$("btnImport").addEventListener("click", () => $("fileImport").click());
+$("fileImport").addEventListener("change", async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const j = JSON.parse(await f.text());
+    const s = j.settings || {};
+    if (j.schema === "psyrena.boss-math/v1") {
+      // v1 stored raw state under `settings`; carry over what still exists.
+      Object.assign(S, s);
+    } else {
+      if (s.format) S.format = s.format;
+      if (s.beatApplesToSkills != null) S.beatRule = s.beatApplesToSkills;
+      if (s.gear != null) S.gear = s.gear;
+      if (s.amp != null) S.amp = s.amp;
+      if (s.paletteWindowS != null) S.windowS = s.paletteWindowS;
+      if (s.ultFiresAtMarks != null) S.ultAt = s.ultFiresAtMarks;
+      if (s.maxMarksConsumed != null) S.maxMarksConsumed = s.maxMarksConsumed;
+      if (s.focusRegenPerS != null) S.focusRegen = s.focusRegenPerS;
+      if (s.teamSize != null) S.teamSize = s.teamSize;
+      if (s.difficulty) S.difficulty = s.difficulty;
+      if (s.difficultyTiers) S.difficulties = s.difficultyTiers;
+      if (s.buffs) S.buffs = s.buffs;
+      if (s.baseMode) S.baseMode = s.baseMode;
+      if (s.budgetDps != null) S.budgetDps = s.budgetDps;
+      if (s.paletteSubSkills != null) S.paletteN = s.paletteSubSkills;
+      if (s.accuracyCostPerExtraSubSkill != null) S.accPerExtraSubSkill = s.accuracyCostPerExtraSubSkill;
+      if (s.ultimateDirectShare != null) S.ultDirectShare = s.ultimateDirectShare;
+      if (s.roleContract) S.contract = s.roleContract;
+      if (s.useKitMitigation != null) S.useKitMitigation = s.useKitMitigation;
+      if (s.hpDesign) S.hpDesign = s.hpDesign;
+      if (s.slotCoefficients) S.coef = s.slotCoefficients;
+      if (s.slotCooldownsS) S.cd = s.slotCooldownsS;
+      if (s.slotOverrides) S.slotOverrides = s.slotOverrides;
+      if (s.boss) S.boss = s.boss;
+      if (s.enrageS != null) S.enrage = s.enrageS;
+      if (s.killTargetS != null) S.killTarget = s.killTargetS;
+      if (s.hpMode) S.hpMode = s.hpMode;
+      if (s.fixedHp != null) S.hp = s.fixedHp;
+      if (s.phases) S.phases = s.phases;
+      if (s.p2CheckSuccess != null) S.p2Success = s.p2CheckSuccess;
+      if (s.debuffDotPctMaxHpPerStack != null) S.dotPctPerStack = s.debuffDotPctMaxHpPerStack;
+      if (s.debuffDurationS != null) S.dotDurS = s.debuffDurationS;
+      if (s.debuffTicksOnlyWhileArmored != null) S.dotArmorOnly = s.debuffTicksOnlyWhileArmored;
+      if (s.team) S.team = s.team;
+    }
+    S.teamSize = Math.max(C.minTeamSize, Math.min(C.maxTeamSize, S.teamSize || 3));
+    syncInputs(); renderTeam(); renderPhases(); recompute();
+  } catch (err) { alert("Import failed: " + err.message); }
+  e.target.value = "";
+});
+
+syncInputs(); renderTeam(); renderPhases(); renderRoster(); renderGlossary(); upgradeTerms(); recompute();
+</script>
+</body>
+</html>

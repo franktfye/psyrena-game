@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NIGHTMARE — animation viewer</title>
+<!--
+  Scratch lookdev page, NOT part of the app build. Served straight from
+  public/ by the vite dev server: http://<host>:5173/anim-viewer.html
+  Loads the boss fight body + P2 dolls and lets you audition every clip and
+  the per-phase sequencing used by src/scenes/nightmareBoss.ts
+  (post 9e574df remap: real-hit P1 swings, Dizzy×2→Swim P3, Two-hand P4).
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0b10; color: #ddd;
+               font: 13px/1.45 system-ui, sans-serif; overflow: hidden; }
+  #canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  #panel { position: absolute; top: 0; left: 0; bottom: 0; width: 300px; overflow-y: auto;
+           background: rgba(12,12,20,.88); border-right: 1px solid #2a2a3a; padding: 12px 14px;
+           box-sizing: border-box; backdrop-filter: blur(4px); }
+  h1 { font-size: 15px; margin: 0 0 2px; color: #f0c674; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+       color: #8a8aa0; margin: 16px 0 6px; }
+  .sub { color: #77778c; font-size: 11px; margin-bottom: 8px; }
+  button { display: block; width: 100%; margin: 3px 0; padding: 6px 9px; text-align: left;
+           background: #1c1c2a; color: #ddd; border: 1px solid #34344a; border-radius: 6px;
+           cursor: pointer; font: inherit; }
+  button:hover { background: #26263a; }
+  button.on { background: #3a2f14; border-color: #f0c674; color: #f0c674; }
+  .row { display: flex; gap: 6px; }
+  .row button { flex: 1; }
+  #status { position: absolute; right: 12px; top: 10px; background: rgba(12,12,20,.8);
+            border: 1px solid #2a2a3a; border-radius: 8px; padding: 6px 12px;
+            font-size: 12px; color: #f0c674; max-width: 40%; }
+  .note { font-size: 11px; color: #66667a; margin-top: 4px; }
+  table { border-collapse: collapse; font-size: 11px; width: 100%; margin-top: 4px; }
+  td { border-top: 1px solid #26263a; padding: 3px 4px 3px 0; vertical-align: top; color: #9a9ab0; }
+  td:first-child { color: #c8c8dd; white-space: nowrap; }
+</style>
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="panel">
+  <h1>NIGHTMARE anim viewer</h1>
+  <div class="sub">click a clip = loop it &middot; shift-click = play once</div>
+
+  <h2>Model</h2>
+  <div class="row">
+    <button id="m-fight" class="on">fight body</button>
+    <button id="m-idle">idle shell</button>
+  </div>
+  <div class="row">
+    <button id="m-d1">doll 1</button><button id="m-d2">doll 2</button>
+    <button id="m-d3">doll 3</button><button id="m-d4">doll 4</button>
+    <button id="m-d5">doll 5</button>
+  </div>
+  <div class="note">dolls auto-run their NLA set at normal speed (1 clip loops, several chain). doll_4 plays reversed export order, same as P2.</div>
+
+  <h2>Clips in loaded model</h2>
+  <div id="clips"><div class="note">loading…</div></div>
+  <button id="stop">■ stop all</button>
+
+  <h2>Phase presets (fight body)</h2>
+  <button data-phase="p1">P1 Onslaught — idle + melee pair every 2 s</button>
+  <button data-phase="p3">P3 Fortress — Dizzy ×2 → Swim_Idle loop</button>
+  <button data-phase="p4">P4 Terror — idle + Two-hand Blast (½ speed) every 5 s</button>
+  <button data-phase="dead">Death — Death01, hold last frame</button>
+  <div class="note">P1/P4 timers are lookdev drumbeats only; live fights fire swings/AOE from the sim's real hits (FightHooks → strike).</div>
+
+  <h2>Current stage mapping</h2>
+  <table>
+    <tr><td>P1</td><td>Zombie_Idle_Loop base; each single-target hit = Melee_Hook / Sword_Regular_B alternating (no decorative loop; boss faces hate target while swinging)</td></tr>
+    <tr><td>P2</td><td>dolls 1–5 (Oral…Genital), NLA clips at normal speed, grow 1→5× across phase; doll_4 clip order reversed</td></tr>
+    <tr><td>P3</td><td>Dizzy twice on entry → Swim_Idle_Loop (float inside pink heal bubble)</td></tr>
+    <tr><td>P4</td><td>Zombie_Idle_Loop base; each raid-wide AOE = Two-hand Blast at ½ speed + ring/bolts; faces highest-hate hero all phase</td></tr>
+    <tr><td>death</td><td>Death01 one-shot, hold last frame</td></tr>
+    <tr><td>spare</td><td>Angry, Sleeping, NinjaJump_Start (phase-transition candidates)</td></tr>
+  </table>
+</div>
+<div id="status">booting…</div>
+
+<script>
+"use strict";
+// Same KTX2 transcoder wiring as src/core/assets.ts — the boss GLBs are
+// KHR_texture_basisu and go magenta/fail without it.
+BABYLON.KhronosTextureContainer2.URLConfig = {
+  jsDecoderModule: "/ktx2/babylon.ktx2Decoder.js",
+  wasmUASTCToASTC: "/ktx2/uastc_astc.wasm",
+  wasmUASTCToBC7: "/ktx2/uastc_bc7.wasm",
+  wasmUASTCToRGBA_UNORM: "/ktx2/uastc_rgba8_unorm_v2.wasm",
+  wasmUASTCToRGBA_SRGB: "/ktx2/uastc_rgba8_srgb_v2.wasm",
+  wasmUASTCToR8_UNORM: "/ktx2/uastc_r8_unorm.wasm",
+  wasmUASTCToRG8_UNORM: "/ktx2/uastc_rg8_unorm.wasm",
+  jsMSCTranscoder: "/ktx2/msc_basis_transcoder.js",
+  wasmMSCTranscoder: "/ktx2/msc_basis_transcoder.wasm",
+  wasmZSTDDecoder: "/ktx2/zstddec.wasm",
+};
+
+const canvas = document.getElementById("canvas");
+const engine = new BABYLON.Engine(canvas, true);
+const scene = new BABYLON.Scene(engine);
+scene.clearColor = new BABYLON.Color4(0.043, 0.043, 0.063, 1);
+
+const camera = new BABYLON.ArcRotateCamera("cam", Math.PI / 2, 1.15, 12,
+  new BABYLON.Vector3(0, 2, 0), scene);
+camera.attachControl(canvas, true);
+camera.wheelDeltaPercentage = 0.02;
+camera.lowerRadiusLimit = 2;
+
+new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0, 1, 0), scene).intensity = 0.9;
+const dir = new BABYLON.DirectionalLight("dir", new BABYLON.Vector3(-0.4, -1, 0.5), scene);
+dir.intensity = 1.4;
+
+const ground = BABYLON.MeshBuilder.CreateGround("g", { width: 40, height: 40 }, scene);
+const gmat = new BABYLON.StandardMaterial("gm", scene);
+gmat.diffuseColor = new BABYLON.Color3(0.09, 0.09, 0.13);
+gmat.specularColor = BABYLON.Color3.Black();
+ground.material = gmat;
+
+const status = document.getElementById("status");
+const clipsDiv = document.getElementById("clips");
+const say = (t) => { status.textContent = t; };
+
+// Lookdev drumbeats mirror nightmareBoss.ts P1_ATTACK_PERIOD / P4_PULSE_PERIOD.
+const P1_ATTACK_PERIOD_MS = 2000;
+const P4_PULSE_PERIOD_MS = 5000;
+
+const MODELS = {
+  fight: "nightmare.glb",
+  idle: "nightmare_idle.glb",
+  d1: "doll_1.glb", d2: "doll_2.glb", d3: "doll_3.glb",
+  d4: "doll_4.glb", d5: "doll_5.glb",
+};
+const cache = {};       // key -> { root, groups }
+let current = null;     // key of shown model
+let timers = [];        // preset interval/timeout handles
+let chainObs = null;    // doll-chain observer target
+
+function clearTimers() {
+  for (const t of timers) { clearInterval(t); clearTimeout(t); }
+  timers = [];
+  if (chainObs) { chainObs.g.onAnimationGroupEndObservable.remove(chainObs.o); chainObs = null; }
+  document.querySelectorAll("[data-phase]").forEach((b) => b.classList.remove("on"));
+}
+
+async function load(key) {
+  if (cache[key]) return cache[key];
+  say("loading " + MODELS[key] + " …");
+  const r = await BABYLON.SceneLoader.ImportMeshAsync("", "/assets/bosses/", MODELS[key], scene);
+  const root = r.meshes[0];
+  for (const g of r.animationGroups) g.stop();
+  // doll_4 (Latency): NLA pair exports in the wrong order — reverse like
+  // nightmareBoss.ts so the lookdev chain matches the live P2 stage.
+  const groups = r.animationGroups.slice();
+  if (key === "d4") groups.reverse();
+  root.setEnabled(false);
+  cache[key] = { root, groups };
+  return cache[key];
+}
+
+function frameCamera(root) {
+  const { min, max } = root.getHierarchyBoundingVectors(true);
+  const c = min.add(max).scale(0.5);
+  const size = max.subtract(min).length();
+  camera.setTarget(c);
+  camera.radius = Math.max(4, size * 1.15);
+}
+
+function stopAll() {
+  clearTimers();
+  for (const k in cache) for (const g of cache[k].groups) {
+    g.speedRatio = 1;
+    g.stop();
+  }
+}
+
+const findClip = (groups, key) => {
+  const k = key.toLowerCase();
+  return groups.find((g) => g.name.toLowerCase().includes(k)) ?? null;
+};
+const loopClip = (g) => {
+  if (!g) return;
+  g.speedRatio = 1;
+  g.reset();
+  g.play(true);
+};
+
+let actionToken = 0;
+
+/**
+ * Play one-shot clips in order, then fall into `loop` — mirrors
+ * nightmareBoss.sequenceThen. Repeating the same group in `seq` replays it
+ * (P3 Dizzy ×2). Cancelled when actionToken advances.
+ */
+function sequenceThen(seq, loop) {
+  const gs = seq.filter(Boolean);
+  const token = ++actionToken;
+  for (const gg of cache[current].groups) gg.stop();
+  let i = 0;
+  const step = () => {
+    if (token !== actionToken) return;
+    const g = gs[i++];
+    if (!g) {
+      loopClip(loop);
+      return;
+    }
+    g.reset();
+    g.play(false);
+    g.onAnimationGroupEndObservable.addOnce(step);
+  };
+  step();
+}
+
+// P2 doll behaviour, mirroring playDollClips: one clip loops; several chain
+// through in sequence, wrapping. Normal speed — stage clock owns pacing.
+function playDollSet(groups) {
+  if (groups.length === 0) return;
+  if (groups.length === 1) {
+    groups[0].speedRatio = 1;
+    return loopClip(groups[0]);
+  }
+  let ix = 0;
+  const playNext = () => {
+    const g = groups[ix % groups.length];
+    ix++;
+    g.speedRatio = 1;
+    g.reset(); g.play(false);
+    const o = g.onAnimationGroupEndObservable.addOnce(() => { chainObs = null; playNext(); });
+    chainObs = { g, o };
+  };
+  playNext();
+}
+
+function renderClipButtons(groups) {
+  clipsDiv.innerHTML = "";
+  if (groups.length === 0) {
+    clipsDiv.innerHTML = '<div class="note">no clips (static model — that is the point of the idle shell)</div>';
+    return;
+  }
+  for (const g of groups) {
+    const b = document.createElement("button");
+    const secs = ((g.to - g.from) / 30).toFixed(1); // Mixamo/Blender exports run 30 fps
+    b.textContent = g.name + "  ·  ~" + secs + " s";
+    b.onclick = (ev) => {
+      stopAll();
+      actionToken++;
+      g.speedRatio = 1;
+      g.reset(); g.play(!ev.shiftKey);
+      say((ev.shiftKey ? "once: " : "loop: ") + g.name);
+    };
+    clipsDiv.appendChild(b);
+  }
+}
+
+async function show(key, { autoplayDolls = true } = {}) {
+  stopAll();
+  const m = await load(key);
+  for (const k in cache) cache[k].root.setEnabled(k === key);
+  current = key;
+  frameCamera(m.root);
+  renderClipButtons(m.groups);
+  document.querySelectorAll("#panel .row button").forEach((b) =>
+    b.classList.toggle("on", b.id === "m-" + key));
+  if (key.startsWith("d") && autoplayDolls) { playDollSet(m.groups); say("doll NLA set running"); }
+  else if (key === "fight") say("fight body — pick a clip or a phase preset");
+  else say(MODELS[key]);
+}
+
+// ---- phase presets (fight body only) — match nightmareBoss clip↔phase map -
+const PRESETS = {
+  // P1: two melee swings only (Two-hand is P4 AOE). Live fights fire each
+  // swing from strike(false); the 2 s interval is uncontrolled-lookdev only.
+  p1(groups) {
+    const idle = findClip(groups, "zombie_idle");
+    const attacks = [findClip(groups, "melee_hook"), findClip(groups, "sword_regular")]
+      .filter(Boolean);
+    loopClip(idle);
+    let ix = 0;
+    timers.push(setInterval(() => {
+      if (attacks.length === 0) return;
+      const atk = attacks[ix % attacks.length];
+      atk.speedRatio = 1;
+      sequenceThen([atk], idle);
+      ix++;
+    }, P1_ATTACK_PERIOD_MS));
+    return "P1: Zombie_Idle_Loop + Melee_Hook / Sword_Regular_B every 2 s (lookdev)";
+  },
+  // P3: Dizzy twice (P2 debuffs landing), then Swim_Idle float — not Sleeping.
+  p3(groups) {
+    const dizzy = findClip(groups, "dizzy");
+    const swim = findClip(groups, "swim_idle");
+    if (dizzy) dizzy.speedRatio = 1;
+    sequenceThen([dizzy, dizzy], swim);
+    return "P3: Dizzy ×2 → Swim_Idle_Loop";
+  },
+  // P4: Two-hand Blast IS the AOE (Angry retired to spare). Half speed so the
+  // wind-up reads as a telegraph — same as clips.blast.speedRatio = 0.5 in-game.
+  p4(groups) {
+    const idle = findClip(groups, "zombie_idle");
+    const blast = findClip(groups, "two-hand");
+    loopClip(idle);
+    timers.push(setInterval(() => {
+      if (!blast) return;
+      blast.speedRatio = 0.5;
+      sequenceThen([blast], idle);
+    }, P4_PULSE_PERIOD_MS));
+    return "P4: Zombie_Idle_Loop + Two-hand Blast @ ½ speed every 5 s (lookdev)";
+  },
+  dead(groups) {
+    const death = findClip(groups, "death");
+    if (death) {
+      death.speedRatio = 1;
+      death.reset();
+      death.play(false);
+    }
+    return "Death01 — holds last frame";
+  },
+};
+document.querySelectorAll("[data-phase]").forEach((b) => {
+  b.onclick = async () => {
+    await show("fight");
+    clearTimers();
+    actionToken++;
+    for (const g of cache.fight.groups) {
+      g.speedRatio = 1;
+      g.stop();
+    }
+    say(PRESETS[b.dataset.phase](cache.fight.groups));
+    b.classList.add("on");
+  };
+});
+
+for (const key of Object.keys(MODELS)) {
+  document.getElementById("m-" + key).onclick = () => show(key);
+}
+document.getElementById("stop").onclick = () => { stopAll(); say("stopped"); };
+
+engine.runRenderLoop(() => scene.render());
+addEventListener("resize", () => engine.resize());
+
+show("fight").catch((e) => say("load failed: " + e.message));
+</script>
+</body>
+</html>

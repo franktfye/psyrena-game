@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- user-scalable=no is deliberate and is NOT an accessibility shortcut: this
+         is a 3D game whose own pinch gesture zooms the CAMERA. Leaving document
+         zoom enabled means a pinch scales the HUD and the canvas instead, and
+         double-tapping a skill button zooms the page. Text scaling still applies
+         to the DOM HUD, which is where all the text is. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <title>Psyrena — Village Hub</title>
+    <link rel="icon" type="image/webp" href="/assets/login/logo.webp" />
+    <!-- Two routes to chromeless mobile play. In-browser, fullscreen.ts calls
+         requestFullscreen() off the Enter Psyrena tap (Android; iPhone ≥ iOS
+         16.4). Installed to the home screen, this manifest + the Apple metas
+         below launch with no browser UI at all — the only route that works on
+         every iPhone, and the one to recommend to players. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#04070c" />
+    <!-- iOS ignores the manifest's display mode; these are its equivalent. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Psyrena" />
+    <link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png" />
+    <style>
+      :root { color-scheme: dark; }
+      html, body {
+        margin: 0; height: 100%; background: #04070c; overflow: hidden;
+        /* Kill pull-to-refresh and rubber-banding: a downward swipe in this game
+           is a camera move, never a page gesture. */
+        overscroll-behavior: none;
+        /* Kill double-tap zoom everywhere. iOS Safari ignores user-scalable=no
+           (above) and will happily double-tap-zoom off a HUD button, which
+           rescales the layout viewport and forces a full backbuffer + render
+           target reallocation — the "screen resolution changed" mid-game bug.
+           touch-action gates by the WHOLE ancestor chain, so `manipulation`
+           here covers every panel and button without touching their own
+           pan-y/none settings; panning and scrolling stay allowed. */
+        touch-action: manipulation;
+      }
+      /* Fixed inset, and deliberately NOT `100dvh`.
+         `dvh` tracks the live viewport, which sounds right and is a trap for a
+         3D canvas: mobile browser chrome shows and hides in response to touch
+         drags, so every drag on the thumbstick re-sizes the canvas, and every
+         re-size makes Babylon reallocate the backbuffer, the 1024^2 shadow map,
+         the MSAA targets and the whole bloom chain. Dragging turned into a burst
+         of render-target reallocations — a hard hitch that reads as a freeze.
+         `position: fixed; inset: 0` is stable and matches the layout viewport;
+         `overflow: hidden` on <body> keeps the chrome from scrolling over it. */
+      #app {
+        display: block; position: fixed; inset: 0; width: 100%; height: 100%;
+        outline: none; touch-action: none;
+      }
+      /* z-index 90 is load-bearing, not decoration.
+         The persistent HUD (player frame, left dock, chat, action bar) is
+         created BEFORE the engine — it has to be, it is scoped to the account,
+         not the scene — and it sits at z-index 9-47. `#boot` carried no z-index
+         at all, so it painted UNDER every one of them while still covering the
+         canvas with its opaque background. A boot that fails or stalls after
+         auth therefore looked like "a black screen with some buttons on it",
+         with `#boot-msg` — the single diagnostic a phone has, since there is no
+         console on iOS Safari — hidden behind the dock icons.
+         90 clears the whole HUD and the panels (40-47) while staying under the
+         rotate gate (100) and the kicked overlay (200), which both outrank a
+         boot in progress. It also makes scene switches a clean loading screen
+         instead of a live-looking HUD over a black void. */
+      #boot {
+        position: fixed; inset: 0; z-index: 90; display: grid; place-content: center; gap: 12px;
+        font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #7fdcf0; background: #04070c; text-align: center; transition: opacity .4s ease;
+        padding: 0 16px;
+      }
+      /* Not `display: none` — the opacity transition is the fade-out. But the
+         faded overlay must not eat taps aimed at the HUD beneath it, and at
+         z-index 90 it covers the entire HUD, so this is now mandatory rather
+         than tidy. */
+      #boot.done { opacity: 0; pointer-events: none; }
+      #boot b { font-size: 22px; letter-spacing: .34em; color: #d8f7ff; font-weight: 600; }
+      /* Load progress: fed by src/core/loadProgress.ts via main.ts. Hidden
+         until the first unit registers so engine-creation phases (which have
+         no countable work) keep the clean text-only look. */
+      #boot-bar {
+        width: min(320px, 70vw); height: 4px; margin: 0 auto; border-radius: 2px;
+        background: rgba(127, 220, 240, .16); overflow: hidden; visibility: hidden;
+      }
+      #boot.loading #boot-bar { visibility: visible; }
+      #boot-bar i {
+        display: block; height: 100%; width: 0%;
+        background: linear-gradient(90deg, #2fa8c8, #40e6ff);
+        transition: width .25s ease;
+      }
+      /* Landscape gate.
+         Supported form factors are a phone held horizontally, a tablet, and a
+         laptop — all landscape. The thumb cluster is laid out from the
+         bottom-right corner and the palette wheel spans ~335 px of it, which on a
+         390 px-wide portrait phone is most of the screen.
+         `orientation: portrait` + `max-width: 699px` means the SHORT side is
+         phone-sized, so a phone in portrait is gated and an iPad in portrait
+         (768 px+) is left alone — a tablet has room for the cluster either way.
+         This is CSS rather than `screen.orientation.lock()` because that API only
+         resolves inside fullscreen, which needs its own user gesture; a gate that
+         works on first paint beats one that needs permission. */
+      #rotate {
+        position: fixed; inset: 0; z-index: 100; display: none;
+        place-content: center; justify-items: center; gap: 14px;
+        background: #04070c; color: #d8f7ff; text-align: center;
+        font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+        letter-spacing: .1em;
+      }
+      #rotate .glyph {
+        font-size: 46px; line-height: 1; color: #40e6ff;
+        /* Nudge it toward the rotation the player should make. */
+        animation: tilt 2.4s ease-in-out infinite;
+      }
+      @keyframes tilt {
+        0%, 40%, 100% { transform: rotate(0deg); }
+        70%, 90% { transform: rotate(-90deg); }
+      }
+      /* Only once there is a GAME to rotate for.
+         `data-scene` is stamped on <body> when a scene finishes building
+         (main.ts), so this covers the village and the arena and nothing
+         before them. The account screens — login, the hero picker — are
+         ordinary DOM forms that are perfectly usable in portrait, and gating
+         them was worse than pointless: the overlay is opaque and sits at
+         z-index 100, so a player typing their password in portrait had it
+         covered mid-form and every tap on Log In landed on the gate instead.
+         A button that silently does nothing is the worst possible first
+         minute, and it happened before the player had any reason to trust
+         that "rotate" was even about them.
+         Rotate when it buys something — the thumb cluster is laid out for
+         landscape — not while filling in a form. */
+      @media (orientation: portrait) and (max-width: 699px) {
+        body[data-controls="touch"][data-scene] #rotate { display: grid; }
+      }
+      /* The gate must never be a dead end.
+         A phone with the OS rotation lock engaged — Control Center's portrait
+         lock on iPhone, which plenty of people simply leave on — NEVER reports
+         `orientation: landscape`, however the player physically turns it. The
+         media query above then latches on forever and the game is unreachable:
+         no login, no canvas, nothing to tap. That is indistinguishable from
+         "the game doesn't open", and it is why this reproduces on iPhone while
+         Android (auto-rotate on by default) is fine.
+         The opt-out is stamped on <body> by main.ts. Portrait play is cramped —
+         the thumb cluster is laid out for landscape — but cramped beats
+         unreachable, and the gate still greets everyone whose phone can rotate. */
+      body[data-rotate-ack] #rotate { display: none !important; }
+      #rotate .skip {
+        margin-top: 6px; background: none; border: 1px solid #23405c; border-radius: 6px;
+        color: #7fdcf0; font: inherit; font-size: 11px; letter-spacing: .1em;
+        padding: 9px 14px; cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="app"></canvas>
+    <div id="boot"><b>PSYRENA</b><span id="boot-msg">initialising engine…</span><div id="boot-bar"><i></i></div></div>
+    <div id="rotate">
+      <div class="glyph">▯</div>
+      <div>ROTATE TO LANDSCAPE</div>
+      <button id="rotate-skip" class="skip" type="button">rotation locked? play anyway</button>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

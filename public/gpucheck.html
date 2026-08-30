@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Psyrena — GPU check</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0; padding: 16px calc(16px + env(safe-area-inset-right, 0px))
+                            calc(24px + env(safe-area-inset-bottom, 0px))
+                            calc(16px + env(safe-area-inset-left, 0px));
+        background: #07090d; color: #cfe6ef;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        -webkit-text-size-adjust: 100%;
+      }
+      h1 { font-size: 15px; letter-spacing: .12em; color: #7fdcf0; margin: 0 0 4px; }
+      p.sub { margin: 0 0 14px; color: #6b8894; font-size: 11.5px; }
+      pre {
+        white-space: pre-wrap; word-break: break-word; margin: 0;
+        background: #0d1219; border: 1px solid #1d2a36; border-radius: 8px; padding: 12px;
+      }
+      button {
+        margin: 14px 0 0; width: 100%; padding: 14px; font: inherit; font-size: 14px;
+        background: #12202c; color: #9fe4f5; border: 1px solid #2a4a5e; border-radius: 8px;
+      }
+      .ok { color: #7fd66a; } .bad { color: #ff8896; } .warn { color: #f0c674; }
+    </style>
+  </head>
+  <body>
+    <h1>PSYRENA GPU CHECK</h1>
+    <p class="sub">
+      Plain page, no game engine. Answers one question: can this browser hand out a
+      working WebGL context at all?
+    </p>
+    <pre id="out">running…</pre>
+    <button id="copy" type="button">Copy report</button>
+
+    <script>
+      // Deliberately dependency-free and outside the app bundle. When the game
+      // will not boot, everything the game could tell you is suspect — this
+      // asks the browser directly, so a failure here means the device, and a
+      // success here means the app.
+      const lines = [];
+      const say = (s) => lines.push(s);
+
+      const yn = (v) => (v ? "yes" : "no");
+
+      say("== environment ==");
+      say("ua           : " + navigator.userAgent);
+      say("secureContext: " + yn(window.isSecureContext));
+      say("dpr          : " + (window.devicePixelRatio || 1));
+      say("screen       : " + screen.width + "x" + screen.height);
+      say("viewport     : " + innerWidth + "x" + innerHeight);
+      say("deviceMemory : " + (navigator.deviceMemory ?? "not reported"));
+      say("cores        : " + (navigator.hardwareConcurrency ?? "not reported"));
+      say("standalone   : " + yn(navigator.standalone === true ||
+        matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches));
+      say("");
+
+      /**
+       * Ask for one context and report everything about the answer.
+       *
+       * `webglcontextcreationerror` is the whole reason this exists: when
+       * getContext fails or returns something dead, the driver's own reason
+       * arrives on that event as `statusMessage`, and nothing else in the
+       * platform surfaces it. That string is usually the actual diagnosis.
+       */
+      function probe(label, type, attrs) {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 64;
+        let creationError = "";
+        canvas.addEventListener(
+          "webglcontextcreationerror",
+          (e) => (creationError = e.statusMessage || "(no statusMessage)"),
+          false
+        );
+        let gl = null;
+        let threw = "";
+        try {
+          gl = canvas.getContext(type, attrs);
+        } catch (err) {
+          threw = String(err);
+        }
+        say("== " + label + " ==");
+        say("  attrs      : " + (attrs ? JSON.stringify(attrs) : "(defaults)"));
+        if (threw) say("  threw      : " + threw);
+        if (!gl) {
+          say("  result     : NULL — no context");
+          if (creationError) say("  driver says: " + creationError);
+          say("");
+          return { ok: false, gl: null };
+        }
+        const lost = gl.isContextLost();
+        say("  result     : context returned, isContextLost=" + lost);
+        if (creationError) say("  driver says: " + creationError);
+        if (lost) {
+          say("  verdict    : DEAD ON ARRIVAL");
+          say("");
+          return { ok: false, gl };
+        }
+        const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+        const renderer = (() => {
+          const ext = gl.getExtension("WEBGL_debug_renderer_info");
+          return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : "(masked)";
+        })();
+        say("  maxTexture : " + maxTex);
+        say("  renderer   : " + renderer);
+        say("  version    : " + gl.getParameter(gl.VERSION));
+        const exts = gl.getSupportedExtensions() || [];
+        const comp = exts.filter((e) => /compressed_texture/.test(e));
+        say("  compressed : " + (comp.length ? comp.join(" ") : "NONE — textures inflate 4x"));
+        say("  verdict    : WORKING");
+        say("");
+        return { ok: true, gl, canvas };
+      }
+
+      // Exactly what the game asks for, then progressively humbler requests.
+      // If the first fails and a later one works, the ATTRIBUTES are the
+      // problem and the engine can simply ask for less.
+      const attempts = [
+        ["webgl2, game's attributes", "webgl2",
+          { stencil: true, preserveDrawingBuffer: false, powerPreference: "high-performance",
+            failIfMajorPerformanceCaveat: false, antialias: true }],
+        ["webgl2, no antialias/stencil", "webgl2",
+          { stencil: false, antialias: false, preserveDrawingBuffer: false }],
+        ["webgl2, bare defaults", "webgl2", undefined],
+        ["webgl1, bare defaults", "webgl", undefined],
+      ];
+
+      const live = [];
+      for (const [label, type, attrs] of attempts) {
+        const r = probe(label, type, attrs);
+        if (r.gl) live.push(r.gl);
+      }
+
+      // How many contexts will this browser hand out before it starts killing
+      // them? On iOS this ceiling is low and shared across the tab — and a page
+      // that has quietly used them all gets exactly the "dead on arrival" that
+      // brought us here.
+      say("== how many contexts can we hold? ==");
+      const held = [];
+      let ceiling = 0;
+      for (let i = 0; i < 20; i++) {
+        const c = document.createElement("canvas");
+        c.width = c.height = 32;
+        const g = c.getContext("webgl2") || c.getContext("webgl");
+        if (!g || g.isContextLost()) break;
+        held.push(g);
+        ceiling = i + 1;
+        // Any earlier context being killed to make room is the real signal.
+        if (held.some((h) => h.isContextLost())) {
+          say("  note       : an EARLIER context died at #" + (i + 1) + " — the browser is recycling");
+          break;
+        }
+      }
+      say("  held       : " + ceiling + (ceiling >= 20 ? "+ (stopped counting)" : ""));
+      say("");
+      for (const g of held.concat(live)) {
+        try { g.getExtension("WEBGL_lose_context")?.loseContext(); } catch {}
+      }
+
+      say("== webgpu ==");
+      if (!("gpu" in navigator)) {
+        say("  navigator.gpu: absent");
+        finish();
+      } else {
+        say("  navigator.gpu: present");
+        navigator.gpu
+          .requestAdapter()
+          .then((a) => {
+            say("  adapter      : " + (a ? "granted" : "refused"));
+            if (!a) return null;
+            return a.requestDevice().then(
+              (d) => {
+                say("  device       : granted");
+                try { d.destroy(); } catch {}
+              },
+              (e) => say("  device       : REFUSED — " + e)
+            );
+          })
+          .catch((e) => say("  adapter      : threw — " + e))
+          .finally(finish);
+      }
+
+      function finish() {
+        const text = lines.join("\n");
+        document.getElementById("out").textContent = text;
+        document.getElementById("copy").addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(text);
+            document.getElementById("copy").textContent = "Copied ✓";
+          } catch {
+            // Clipboard is gated on some iOS versions; select it instead so a
+            // long-press copy works.
+            const r = document.createRange();
+            r.selectNodeContents(document.getElementById("out"));
+            getSelection().removeAllRanges();
+            getSelection().addRange(r);
+            document.getElementById("copy").textContent = "Selected — long-press to copy";
+          }
+        });
+      }
+    </script>
+  </body>
+</html>

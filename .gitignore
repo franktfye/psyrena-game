@@ -1,0 +1,42 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.vite/
+
+# Account database — local state, seeded on first run (server/app.mjs)
+server/*.db
+server/*.db-*
+
+# Vendored KTX2 transcoder — regenerate with `npm run assets:ktx2`
+public/ktx2/
+
+# Design bible and production source material live in the private repo.
+# See "What is not in this repo" in README.md.
+/docs/
+/assets/
+
+# Intermediates must never land under public/ — Vite serves that tree verbatim
+# and copies it into dist/, so a stray scratch GLB ships to every client.
+public/assets/work/
+
+# Editor/pipeline backups
+*.bak
+
+# Local tooling state
+.claude/
+.tripo/
+tmp-voxcpm-vo/
+
+# Vendored pSFX library (github.com/JimHPerry/psfx)
+psfx/
+
+# SFX audition tool + its exported choices — dev-only, regenerate on request;
+# depends on the gitignored psfx/ library so it can never ship anyway.
+sfxpicker.html
+sfx-choices.json
+
+# Chosen PSFX one-shots — the PSFX license (non-commercial v1.1) bars
+# redistributing the audio, so only the manifest (src/state/sfx.ts) is
+# tracked. Regenerate with `node tools/sync-sfx.mjs` (reads psfx/sfx-choices.json).
+public/assets/sfx/

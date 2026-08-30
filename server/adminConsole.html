@@ -1,0 +1,732 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Psyrena Admin</title>
+<style>
+  :root {
+    --bg: #0a1220; --panel: #101c30; --panel2: #16263f; --line: #23405c;
+    --text: #cfe6f5; --dim: #7fa3bd; --accent: #40e6ff; --gold: #ffd97a;
+    --good: #6fe08c; --bad: #ff7a7a; --warn: #ffb84d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.5 "Segoe UI", system-ui, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 10px 18px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 5;
+  }
+  header .mark { font-weight: 700; letter-spacing: .12em; color: var(--gold); }
+  header .mark span { color: var(--accent); }
+  header .who { margin-left: auto; color: var(--dim); }
+  nav { display: flex; gap: 4px; padding: 8px 14px 0; flex-wrap: wrap; }
+  nav button {
+    background: none; border: 1px solid transparent; border-bottom: none;
+    color: var(--dim); padding: 7px 14px; cursor: pointer; font: inherit;
+    border-radius: 6px 6px 0 0; letter-spacing: .04em;
+  }
+  nav button:hover { color: var(--text); }
+  nav button.on { color: var(--accent); background: var(--panel); border-color: var(--line); }
+  nav button .badge {
+    background: var(--bad); color: #fff; border-radius: 8px; padding: 0 6px;
+    font-size: 10px; margin-left: 5px;
+  }
+  main { padding: 14px 18px 60px; max-width: 1200px; margin: 0 auto; }
+  h2 { font-size: 14px; letter-spacing: .08em; text-transform: uppercase; color: var(--gold); margin: 18px 0 8px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .card .v { font-size: 20px; font-weight: 700; color: var(--accent); }
+  .card .k { color: var(--dim); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; }
+  .card.alert .v { color: var(--bad); }
+  table { border-collapse: collapse; width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; background: var(--panel2); }
+  tr:last-child td { border-bottom: none; }
+  tr.click { cursor: pointer; }
+  tr.click:hover td { background: var(--panel2); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+  input, select, textarea {
+    background: #0c1626; color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 9px; font: inherit;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  button.act {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit;
+  }
+  button.act:hover { border-color: var(--accent); color: var(--accent); }
+  button.act.danger:hover { border-color: var(--bad); color: var(--bad); }
+  button.act.small { padding: 2px 8px; font-size: 11px; }
+  .tag { display: inline-block; border-radius: 4px; padding: 0 6px; font-size: 10px; letter-spacing: .05em; margin-right: 3px; }
+  .tag.admin { background: #3a2e0e; color: var(--gold); }
+  .tag.banned { background: #3a1414; color: var(--bad); }
+  .tag.muted { background: #33280f; color: var(--warn); }
+  .tag.online { background: #0f3320; color: var(--good); }
+  .tag.off { background: var(--panel2); color: var(--dim); }
+  .bars { display: flex; align-items: flex-end; gap: 3px; height: 70px; padding: 6px 0 0; }
+  .bars .b { flex: 1; background: var(--accent); opacity: .75; border-radius: 2px 2px 0 0; min-height: 2px; position: relative; }
+  .bars .b:hover { opacity: 1; }
+  .bars .b .tip {
+    display: none; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+    background: #000; padding: 2px 7px; border-radius: 4px; white-space: nowrap; font-size: 10px; z-index: 3;
+  }
+  .bars .b:hover .tip { display: block; }
+  .chart { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+  .chart .t { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+  .msg { color: var(--good); min-height: 18px; }
+  .msg.err { color: var(--bad); }
+  .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+  .dim { color: var(--dim); }
+  .panelbox { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  #login { max-width: 340px; margin: 12vh auto; text-align: center; }
+  #login input { width: 100%; margin: 5px 0; }
+  #login button { width: 100%; margin-top: 10px; background: var(--accent); color: #04202b; border: none; font-weight: 700; padding: 9px; border-radius: 6px; cursor: pointer; }
+  #detail { border-left: 3px solid var(--accent); margin-top: 12px; }
+  pre.data { margin: 0; white-space: pre-wrap; word-break: break-all; font-size: 11px; color: var(--dim); }
+  .codechip { font-family: ui-monospace, monospace; color: var(--gold); cursor: pointer; }
+  .codechip:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<header>
+  <div class="mark">PSYRENA <span>ADMIN</span></div>
+  <div class="who" id="who"></div>
+  <button class="act" id="logout" style="display:none">Log out</button>
+</header>
+<nav id="nav" style="display:none"></nav>
+<main id="main">Loading…</main>
+
+<script>
+"use strict";
+const $ = (sel, root = document) => root.querySelector(sel);
+
+/** DOM builder — everything user-generated goes through textContent, never innerHTML. */
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v);
+  }
+  for (const c of children.flat()) {
+    if (c == null) continue;
+    node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  }
+  return node;
+}
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error ?? ("HTTP " + res.status));
+  return json;
+}
+
+const fmtWhen = (ms) => ms ? new Date(ms).toLocaleString() : "—";
+const fmtAgo = (ms) => {
+  if (!ms) return "never";
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 90) return Math.round(s) + "s ago";
+  if (s < 5400) return Math.round(s / 60) + "m ago";
+  if (s < 129600) return Math.round(s / 3600) + "h ago";
+  return Math.round(s / 86400) + "d ago";
+};
+const fmtN = (n) => Number(n).toLocaleString();
+
+function flags(u) {
+  const out = [];
+  if (u.isAdmin) out.push(el("span", { class: "tag admin" }, "ADMIN"));
+  if (u.banned) out.push(el("span", { class: "tag banned", title: (u.banReason || "") + (u.bannedUntil ? " until " + fmtWhen(u.bannedUntil) : "") }, "BANNED"));
+  if (u.muted) out.push(el("span", { class: "tag muted", title: "until " + fmtWhen(u.mutedUntil) }, "MUTED"));
+  out.push(u.online
+    ? el("span", { class: "tag online" }, "ONLINE")
+    : el("span", { class: "tag off" }, "OFF"));
+  return out;
+}
+
+function barChart(title, days, series) {
+  const max = Math.max(1, ...Object.values(series));
+  return el("div", { class: "chart" },
+    el("div", { class: "t" }, title),
+    el("div", { class: "bars" },
+      days.map((d) => {
+        const v = series[d] ?? 0;
+        return el("div", { class: "b", style: `height:${Math.max(3, (v / max) * 100)}%` },
+          el("span", { class: "tip" }, `${d}: ${v}`));
+      })),
+  );
+}
+
+function statusLine(target) {
+  const line = el("div", { class: "msg" });
+  target.append(line);
+  return {
+    ok(text) { line.className = "msg"; line.textContent = text; },
+    err(text) { line.className = "msg err"; line.textContent = text; },
+  };
+}
+
+const confirmDo = (text) => window.confirm(text);
+
+// ---------------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------------
+const main = $("#main");
+const views = {};
+let me = null;
+
+views.overview = async () => {
+  const o = await api("/api/admin/overview");
+  const t = o.totals;
+  const card = (k, v, alert) => el("div", { class: "card" + (alert ? " alert" : "") },
+    el("div", { class: "v" }, fmtN(v)), el("div", { class: "k" }, k));
+  main.replaceChildren(
+    el("h2", {}, "Right now"),
+    el("div", { class: "cards" },
+      card("Players online", t.online),
+      card("Live sessions", t.sessions),
+      card("In queue", t.queue),
+      card("Open rooms", t.rooms),
+      card("Open reports", t.openReports, t.openReports > 0),
+    ),
+    el("h2", {}, "Accounts"),
+    el("div", { class: "cards" },
+      card("Users", t.users),
+      card("Admins", t.admins),
+      card("Banned", t.banned, t.banned > 0),
+      card("Muted", t.muted),
+      card("Registered today", t.registrationsToday),
+    ),
+    el("h2", {}, "Activity today"),
+    el("div", { class: "cards" },
+      card("Fights", t.fightsToday),
+      card("Chat messages", t.messagesToday),
+      card("Imaginz in circulation", t.imaginzSupply),
+      card("Lifetime battles", o.lifetime.battles),
+      card("Lifetime boss kills", o.lifetime.bossesDefeated),
+    ),
+    el("h2", {}, "Last 14 days"),
+    el("div", { class: "grid2" },
+      barChart("Registrations", o.days, o.series.registrations),
+      barChart("Logins", o.days, o.series.logins),
+      barChart("Fights", o.days, o.series.fights),
+      barChart("Coffee purchases", o.days, o.series.purchases),
+    ),
+    el("div", { class: "grid2" },
+      el("div", {},
+        el("h2", {}, "Top players"),
+        el("table", {},
+          el("tr", {}, el("th", {}, "Player"), el("th", {}, "Rank"), el("th", {}, "Score"), el("th", {}, "W/B"), el("th", {}, "Hero")),
+          o.topPlayers.map((p) => el("tr", { class: "click", onclick: () => openUser(p.id) },
+            el("td", {}, p.username), el("td", {}, p.rank ?? "—"), el("td", {}, fmtN(p.score)),
+            el("td", {}, `${p.wins}/${p.battles}`), el("td", {}, p.hero ?? "—"))),
+        )),
+      el("div", {},
+        el("h2", {}, "Events (7 days)"),
+        el("table", {},
+          el("tr", {}, el("th", {}, "Type"), el("th", {}, "Count")),
+          o.eventTypes.map((r) => el("tr", {}, el("td", { class: "mono" }, r.type), el("td", {}, fmtN(r.count)))),
+        ),
+        el("h2", {}, "Hero popularity"),
+        el("table", {},
+          o.heroPopularity.map((h) => el("tr", {}, el("td", {}, h.hero), el("td", {}, fmtN(h.count)))),
+        )),
+    ),
+  );
+};
+
+// ---- Users ----------------------------------------------------------------
+
+async function userAction(path, body, refresh) {
+  try {
+    const r = await api(path, body);
+    if (refresh) await refresh();
+    return r;
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+function actionButtons(u, refresh) {
+  const btns = [];
+  const add = (label, danger, fn) => btns.push(el("button", { class: "act small" + (danger ? " danger" : ""), onclick: fn }, label));
+  if (u.isAdmin) {
+    add("Demote", true, () => confirmDo(`Remove ${u.username}'s admin access?`) &&
+      userAction("/api/admin/user/appoint", { userId: u.id, admin: false }, refresh));
+  } else {
+    add("Make admin", false, () => confirmDo(`Appoint ${u.username} as an ADMIN? They get full access to this console.`) &&
+      userAction("/api/admin/user/appoint", { userId: u.id, admin: true }, refresh));
+  }
+  if (u.banned) {
+    add("Unban", false, () => userAction("/api/admin/user/unban", { userId: u.id }, refresh));
+  } else if (!u.isAdmin) {
+    add("Ban", true, () => {
+      const hours = prompt(`Ban ${u.username} for how many hours? (0 = permanent)`, "0");
+      if (hours === null) return;
+      const reason = prompt("Reason (shown to the player):", "") ?? "";
+      userAction("/api/admin/user/ban", { userId: u.id, hours: Number(hours), reason }, refresh);
+    });
+  }
+  if (u.muted) {
+    add("Unmute", false, () => userAction("/api/admin/user/unmute", { userId: u.id }, refresh));
+  } else {
+    add("Mute", true, () => {
+      const minutes = prompt(`Mute ${u.username} in chat for how many minutes?`, "60");
+      if (minutes === null) return;
+      userAction("/api/admin/user/mute", { userId: u.id, minutes: Number(minutes) }, refresh);
+    });
+  }
+  if (u.online) add("Kick", true, () => confirmDo(`Disconnect ${u.username} now?`) &&
+    userAction("/api/admin/user/kick", { userId: u.id }, refresh));
+  add("Grant Imaginz", false, () => {
+    const amount = prompt(`Adjust ${u.username}'s Imaginz by (negative to remove):`, "500");
+    if (amount === null) return;
+    userAction("/api/admin/user/grant", { userId: u.id, imaginz: Number(amount) }, refresh);
+  });
+  add("Set password", true, () => {
+    const pw = prompt(`New password for ${u.username} (8+ characters). Their existing sessions will be logged out.`);
+    if (pw === null || pw === "") return;
+    userAction("/api/admin/user/password", { userId: u.id, password: pw }, refresh)
+      .then((r) => r && alert(`Password updated for ${u.username}.`));
+  });
+  return btns;
+}
+
+let userQuery = { q: "", filter: "" };
+
+async function openUser(id) {
+  await views.users();
+  const u = await api("/api/admin/user?id=" + id);
+  const refresh = () => openUser(id);
+  const detail = el("div", { class: "panelbox", id: "detail" },
+    el("div", { class: "row" },
+      el("b", { style: "font-size:16px;color:var(--gold)" }, u.username),
+      el("span", { class: "dim" }, `#${u.id}`),
+      ...flags(u),
+      el("span", { style: "margin-left:auto" }, ...actionButtons(u, refresh)),
+    ),
+    el("div", { class: "grid2" },
+      el("table", {},
+        [["Created", u.createdAt + " UTC"], ["Last seen", fmtAgo(u.lastSeen)],
+         ["Rank / Title", `${u.rank ?? "—"} · ${u.title ?? "—"}`], ["Score", fmtN(u.score)],
+         ["Battles / Wins / Bosses", `${u.battles} / ${u.wins} / ${u.bossesDefeated}`],
+         ["Playtime", `${u.playtimeMin} min`], ["Imaginz", fmtN(u.imaginz)],
+         ["Selected hero", u.selectedHero ?? "—"], ["Unlocked", u.unlockedHeroes.join(", ")],
+         ["Invited with", u.invitedWith ?? "—"], ["Student ID", u.studentId ?? "—"],
+         ["Reports against", u.reportsAgainst],
+         ...(u.banned ? [["Ban", `${u.banReason || "(no reason)"} — until ${fmtWhen(u.bannedUntil)}`]] : []),
+         ...(u.potions.length ? [["Active potions", u.potions.map((p) => `${p.effect} +${Math.round(p.magnitude * 100)}% until ${fmtWhen(p.expiresAt)}`).join("; ")]] : []),
+        ].map(([k, v]) => el("tr", {}, el("th", {}, k), el("td", {}, v)))),
+      el("div", {},
+        el("h2", {}, "Hero records"),
+        el("table", {},
+          el("tr", {}, el("th", {}, "Hero"), el("th", {}, "Battles"), el("th", {}, "Wins"), el("th", {}, "Best DPS")),
+          u.heroRecords.length
+            ? u.heroRecords.map((h) => el("tr", {}, el("td", {}, h.hero), el("td", {}, h.battles), el("td", {}, h.wins), el("td", {}, Math.round(h.bestDps))))
+            : el("tr", {}, el("td", { class: "dim", colspan: 4 }, "No battles yet.")))),
+    ),
+    el("div", { class: "grid2" },
+      el("div", {},
+        el("h2", {}, "Recent events"),
+        el("table", {}, u.recentEvents.map((e) => el("tr", {},
+          el("td", { class: "dim" }, fmtAgo(e.at)),
+          el("td", { class: "mono" }, e.type),
+          el("td", {}, el("pre", { class: "data" }, e.data ? JSON.stringify(e.data) : "")))))),
+      el("div", {},
+        el("h2", {}, "Recent lobby messages"),
+        el("table", {}, u.recentMessages.length
+          ? u.recentMessages.map((m) => el("tr", {},
+              el("td", { class: "dim" }, fmtAgo(m.at)), el("td", {}, m.body)))
+          : el("tr", {}, el("td", { class: "dim" }, "Nothing recent."))))),
+  );
+  $("#detail")?.remove();
+  $("#userlist").after(detail);
+  detail.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+views.users = async () => {
+  const params = new URLSearchParams();
+  if (userQuery.q) params.set("q", userQuery.q);
+  if (userQuery.filter) params.set("filter", userQuery.filter);
+  const { users, total } = await api("/api/admin/users?" + params);
+  const search = el("input", { placeholder: "Search username…", value: userQuery.q,
+    oninput: (e) => { userQuery.q = e.target.value; clearTimeout(search._t); search._t = setTimeout(views.users, 300); } });
+  const filter = el("select", { onchange: (e) => { userQuery.filter = e.target.value; views.users(); } },
+    ["", "online", "admins", "banned", "muted"].map((f) =>
+      el("option", { value: f, ...(userQuery.filter === f ? { selected: "" } : {}) }, f || "everyone")));
+  const nuName = el("input", { placeholder: "username" });
+  const nuPass = el("input", { placeholder: "password (8+ chars)" });
+  const nuStudent = el("input", { placeholder: "student ID (optional)" });
+  const nuBox = el("div");
+  const nuStatus = statusLine(nuBox);
+  main.replaceChildren(
+    el("h2", {}, `Users (${fmtN(total)})`),
+    el("div", { class: "panelbox" },
+      el("div", { class: "row" },
+        el("span", { class: "dim" }, "New user"), nuName, nuPass, nuStudent,
+        el("button", { class: "act", onclick: async () => {
+          try {
+            const r = await api("/api/admin/user/create", {
+              username: nuName.value, password: nuPass.value, studentId: nuStudent.value,
+            });
+            userQuery = { q: "", filter: "" };
+            await openUser(r.id);
+          } catch (e) { nuStatus.err(e.message); }
+        } }, "Create")),
+      nuBox),
+    el("div", { class: "row" }, search, filter),
+    el("table", { id: "userlist" },
+      el("tr", {}, el("th", {}, "#"), el("th", {}, "Player"), el("th", {}, "Status"), el("th", {}, "Rank"),
+        el("th", {}, "Score"), el("th", {}, "W/B"), el("th", {}, "Imaginz"), el("th", {}, "Last seen")),
+      users.map((u) => el("tr", { class: "click", onclick: () => openUser(u.id) },
+        el("td", { class: "dim" }, u.id), el("td", {}, u.username), el("td", {}, ...flags(u)),
+        el("td", {}, u.rank ?? "—"), el("td", {}, fmtN(u.score)), el("td", {}, `${u.wins}/${u.battles}`),
+        el("td", {}, fmtN(u.imaginz)), el("td", { class: "dim" }, fmtAgo(u.lastSeen)))),
+    ),
+  );
+  search.focus();
+  search.setSelectionRange(search.value.length, search.value.length);
+};
+
+// ---- Invites --------------------------------------------------------------
+
+function codeTable(codes, kind, onToggle) {
+  return el("table", {},
+    el("tr", {}, el("th", {}, "Code"), ...(kind === "gift" ? [el("th", {}, "Reward")] : []),
+      el("th", {}, "Uses"), el("th", {}, "Expires"), el("th", {}, "Note"),
+      el("th", {}, "Used by"), el("th", {}, "By"), el("th", {}, "")),
+    codes.length ? codes.map((c) => el("tr", { style: c.disabled ? "opacity:.45" : "" },
+      el("td", {}, el("span", { class: "codechip", title: "Click to copy",
+        onclick: () => navigator.clipboard?.writeText(c.code) }, c.code)),
+      ...(kind === "gift" ? [el("td", {}, c.reward.type === "imaginz" ? `${fmtN(c.reward.amount)} Imaginz` : c.reward.item)] : []),
+      el("td", {}, `${c.uses} / ${c.maxUses === 0 ? "∞" : c.maxUses}`),
+      el("td", { class: "dim" }, c.expiresAt ? fmtWhen(c.expiresAt) : "never"),
+      el("td", { class: "dim" }, c.note),
+      el("td", { class: "dim" }, c.usedBy.join(", ") || "—"),
+      el("td", { class: "dim" }, c.createdBy ?? "—"),
+      el("td", {}, el("button", { class: "act small" + (c.disabled ? "" : " danger"),
+        onclick: () => onToggle(c) }, c.disabled ? "Enable" : "Disable")),
+    )) : el("tr", {}, el("td", { class: "dim", colspan: 8 }, "No codes yet.")),
+  );
+}
+
+views.invites = async () => {
+  const { required, envOpen, codes } = await api("/api/admin/invites");
+  const count = el("input", { type: "number", value: "1", min: "1", max: "50", style: "width:70px", title: "How many codes" });
+  const maxUses = el("input", { type: "number", value: "1", min: "0", style: "width:70px", title: "Uses per code (0 = unlimited)" });
+  const expires = el("input", { type: "number", value: "", min: "1", placeholder: "∞", style: "width:70px", title: "Days until expiry" });
+  const note = el("input", { placeholder: "note (optional)" });
+  const box = el("div");
+  const status = statusLine(box);
+  main.replaceChildren(
+    el("h2", {}, "Invitation codes"),
+    el("div", { class: "panelbox" },
+      el("div", { class: "row" },
+        el("span", {}, required
+          ? "Registration currently REQUIRES an invitation code."
+          : "Registration is OPEN — anyone can create an account; codes are optional."),
+        envOpen
+          ? el("span", { class: "dim" }, "(forced open by PSYRENA_INVITE_REQUIRED=0)")
+          : el("button", { class: "act" + (required ? "" : " danger"), onclick: async () => {
+              if (required && !confirmDo("Allow FREE registration? Anyone who can reach the site will be able to create an account.")) return;
+              try {
+                await api("/api/admin/invites/policy", { required: !required });
+                views.invites();
+              } catch (e) { status.err(e.message); }
+            } }, required ? "Allow free registration" : "Require invitation codes")),
+      el("div", { class: "row" },
+        el("span", { class: "dim" }, "Mint"), count,
+        el("span", { class: "dim" }, "codes ×"), maxUses,
+        el("span", { class: "dim" }, "uses (0=∞), expiring in"), expires,
+        el("span", { class: "dim" }, "days"), note,
+        el("button", { class: "act", onclick: async () => {
+          try {
+            const r = await api("/api/admin/invites/create", {
+              count: Number(count.value), maxUses: Number(maxUses.value),
+              expiresDays: Number(expires.value) || 0, note: note.value,
+            });
+            status.ok("Created: " + r.codes.join("  "));
+            const list = await api("/api/admin/invites");
+            $("#invlist").replaceWith(renderList(list.codes));
+          } catch (e) { status.err(e.message); }
+        } }, "Create")),
+      box),
+    renderList(codes),
+  );
+  function renderList(codes) {
+    const t = codeTable(codes, "invite", async (c) => {
+      await api("/api/admin/invites/disable", { code: c.code, disabled: !c.disabled });
+      views.invites();
+    });
+    t.id = "invlist";
+    return t;
+  }
+};
+
+// ---- Gift codes -----------------------------------------------------------
+
+views.gifts = async () => {
+  const { codes, items } = await api("/api/admin/gifts");
+  const type = el("select", {}, el("option", { value: "imaginz" }, "Imaginz"), el("option", { value: "item" }, "Coffee item"));
+  const amount = el("input", { type: "number", value: "500", min: "1", style: "width:90px" });
+  const item = el("select", { style: "display:none" }, items.map((i) => el("option", { value: i.id }, i.label)));
+  type.addEventListener("change", () => {
+    amount.style.display = type.value === "imaginz" ? "" : "none";
+    item.style.display = type.value === "item" ? "" : "none";
+  });
+  const custom = el("input", { placeholder: "custom code (optional)", style: "width:170px" });
+  const maxUses = el("input", { type: "number", value: "1", min: "0", style: "width:70px", title: "Uses (0 = unlimited)" });
+  const expires = el("input", { type: "number", value: "", min: "1", placeholder: "∞", style: "width:70px", title: "Days until expiry" });
+  const note = el("input", { placeholder: "note (optional)" });
+  const box = el("div");
+  const status = statusLine(box);
+  main.replaceChildren(
+    el("h2", {}, "Gift codes — coffee shop"),
+    el("div", { class: "panelbox" },
+      el("div", { class: "dim" }, "Players redeem these at the coffee-shop attendant (Redeem Code). One redemption per player per code."),
+      el("div", { class: "row" },
+        type, amount, item, custom,
+        el("span", { class: "dim" }, "×"), maxUses,
+        el("span", { class: "dim" }, "uses (0=∞), expiring in"), expires,
+        el("span", { class: "dim" }, "days"), note,
+        el("button", { class: "act", onclick: async () => {
+          try {
+            const r = await api("/api/admin/gifts/create", {
+              rewardType: type.value, amount: Number(amount.value), item: item.value,
+              code: custom.value, maxUses: Number(maxUses.value),
+              expiresDays: Number(expires.value) || 0, note: note.value,
+            });
+            status.ok("Created: " + r.code);
+            views.gifts();
+          } catch (e) { status.err(e.message); }
+        } }, "Create")),
+      box),
+    codeTable(codes, "gift", async (c) => {
+      await api("/api/admin/gifts/disable", { code: c.code, disabled: !c.disabled });
+      views.gifts();
+    }),
+  );
+};
+
+// ---- Chat moderation ------------------------------------------------------
+
+views.chat = async () => {
+  const from = el("input", { placeholder: "filter by username…" });
+  const render = async () => {
+    let data;
+    try {
+      data = await api("/api/admin/chat?limit=200" + (from.value.trim() ? "&user=" + encodeURIComponent(from.value.trim()) : ""));
+    } catch (e) {
+      $("#chatlist").replaceChildren(el("tr", {}, el("td", { class: "dim" }, e.message)));
+      return;
+    }
+    $("#chatlist").replaceChildren(
+      el("tr", {}, el("th", {}, "When"), el("th", {}, "From"), el("th", {}, "Message"), el("th", {}, "")),
+      ...(data.messages.length ? data.messages.map((m) => el("tr", {},
+        el("td", { class: "dim", style: "white-space:nowrap" }, fmtAgo(m.at)),
+        el("td", { class: "click", onclick: () => openUser(m.userId), style: "color:var(--accent);cursor:pointer" }, m.from),
+        el("td", {}, m.body),
+        el("td", { style: "white-space:nowrap" },
+          el("button", { class: "act small danger", onclick: async () => {
+            if (!confirmDo("Delete this message from lobby history?")) return;
+            await api("/api/admin/chat/delete", { id: m.id });
+            render();
+          } }, "Delete"),
+          " ",
+          el("button", { class: "act small danger", onclick: async () => {
+            const minutes = prompt(`Mute ${m.from} for how many minutes?`, "60");
+            if (minutes === null) return;
+            await api("/api/admin/user/mute", { userId: m.userId, minutes: Number(minutes) }).catch((e) => alert(e.message));
+            render();
+          } }, "Mute")),
+      )) : [el("tr", {}, el("td", { class: "dim", colspan: 4 }, "No lobby messages."))]),
+    );
+  };
+  from.addEventListener("input", () => { clearTimeout(from._t); from._t = setTimeout(render, 300); });
+  main.replaceChildren(
+    el("h2", {}, "Lobby chat"),
+    el("div", { class: "dim" }, "Deleting removes a message from stored history (new joiners never see it). Whispers are private — they surface only through player reports."),
+    el("div", { class: "row" }, from, el("button", { class: "act", onclick: render }, "Refresh")),
+    el("table", { id: "chatlist" }),
+  );
+  render();
+};
+
+// ---- Reports --------------------------------------------------------------
+
+let reportFilter = "open";
+
+views.reports = async () => {
+  const { reports } = await api("/api/admin/reports?status=" + reportFilter);
+  const filter = el("select", { onchange: (e) => { reportFilter = e.target.value; views.reports(); } },
+    ["open", "resolved", "dismissed", "all"].map((f) =>
+      el("option", { value: f, ...(reportFilter === f ? { selected: "" } : {}) }, f)));
+  main.replaceChildren(
+    el("h2", {}, "Reports"),
+    el("div", { class: "row" }, filter),
+    ...(reports.length ? reports.map((r) => {
+      const act = (status) => async () => {
+        const resolution = status === "resolved" ? (prompt("Resolution note:", "") ?? "") : "";
+        await api("/api/admin/reports/resolve", { id: r.id, status, resolution }).catch((e) => alert(e.message));
+        views.reports();
+      };
+      return el("div", { class: "panelbox", style: "margin-bottom:10px" },
+        el("div", { class: "row" },
+          el("b", {}, `#${r.id}`),
+          el("span", {}, r.reporter, el("span", { class: "dim" }, " reported "),
+            r.target ? el("span", { class: "click", style: "color:var(--accent);cursor:pointer",
+              onclick: () => r.targetId && openUser(r.targetId) }, r.target) : "(no target)"),
+          el("span", { class: "dim" }, fmtAgo(r.createdAt)),
+          el("span", { class: "tag " + (r.status === "open" ? "banned" : "off") }, r.status.toUpperCase()),
+          r.status !== "open" && r.resolvedBy ? el("span", { class: "dim" }, `by ${r.resolvedBy}`) : null,
+        ),
+        el("div", {}, el("b", { class: "dim" }, "Reason: "), r.reason),
+        r.messageBody != null
+          ? el("div", {}, el("b", { class: "dim" }, `Message (${r.channel}): `), el("span", { class: "mono" }, "“" + r.messageBody + "”"))
+          : null,
+        r.resolution ? el("div", { class: "dim" }, "Resolution: " + r.resolution) : null,
+        r.status === "open" ? el("div", { class: "row" },
+          el("button", { class: "act small", onclick: act("resolved") }, "Resolve"),
+          el("button", { class: "act small", onclick: act("dismissed") }, "Dismiss"),
+          r.targetId != null ? el("button", { class: "act small danger", onclick: async () => {
+            const minutes = prompt(`Mute ${r.target} for how many minutes?`, "60");
+            if (minutes === null) return;
+            await api("/api/admin/user/mute", { userId: r.targetId, minutes: Number(minutes) }).catch((e) => alert(e.message));
+          } }, "Mute target") : null,
+          r.targetId != null ? el("button", { class: "act small danger", onclick: async () => {
+            const hours = prompt(`Ban ${r.target} for how many hours? (0 = permanent)`, "24");
+            if (hours === null) return;
+            const reason = prompt("Reason (shown to the player):", r.reason) ?? "";
+            await api("/api/admin/user/ban", { userId: r.targetId, hours: Number(hours), reason }).catch((e) => alert(e.message));
+          } }, "Ban target") : null,
+        ) : null,
+      );
+    }) : [el("div", { class: "dim" }, "Nothing here.")]),
+  );
+};
+
+// ---- Events ---------------------------------------------------------------
+
+let eventFilter = { type: "", user: "" };
+
+views.events = async () => {
+  const params = new URLSearchParams({ limit: "100" });
+  if (eventFilter.type) params.set("type", eventFilter.type);
+  if (eventFilter.user) params.set("user", eventFilter.user);
+  let data;
+  try {
+    data = await api("/api/admin/events?" + params);
+  } catch (e) {
+    main.replaceChildren(el("h2", {}, "Event log"), el("div", { class: "msg err" }, e.message),
+      el("button", { class: "act", onclick: () => { eventFilter = { type: "", user: "" }; views.events(); } }, "Clear filters"));
+    return;
+  }
+  const typeSel = el("select", { onchange: (e) => { eventFilter.type = e.target.value; views.events(); } },
+    el("option", { value: "" }, "every type"),
+    data.types.map((t) => el("option", { value: t, ...(eventFilter.type === t ? { selected: "" } : {}) }, t)));
+  const userIn = el("input", { placeholder: "username…", value: eventFilter.user,
+    onchange: (e) => { eventFilter.user = e.target.value.trim(); views.events(); } });
+  const rows = (events) => events.map((e) => el("tr", {},
+    el("td", { class: "dim", style: "white-space:nowrap" }, fmtWhen(e.at)),
+    el("td", { class: "mono" }, e.type),
+    e.user ? el("td", { class: "click", style: "color:var(--accent);cursor:pointer", onclick: () => openUser(e.userId) }, e.user) : el("td", { class: "dim" }, "—"),
+    el("td", {}, el("pre", { class: "data" }, e.data ? JSON.stringify(e.data) : ""))));
+  const table = el("table", {},
+    el("tr", {}, el("th", {}, "When"), el("th", {}, "Type"), el("th", {}, "Player"), el("th", {}, "Data")),
+    rows(data.events));
+  let last = data.events.length ? data.events[data.events.length - 1].id : 0;
+  main.replaceChildren(
+    el("h2", {}, "Event log"),
+    el("div", { class: "row" }, typeSel, userIn, el("button", { class: "act", onclick: views.events }, "Refresh")),
+    table,
+    el("button", { class: "act", style: "margin-top:8px", onclick: async (ev) => {
+      const more = await api("/api/admin/events?" + params + "&before=" + last);
+      if (!more.events.length) { ev.target.textContent = "No more"; return; }
+      last = more.events[more.events.length - 1].id;
+      table.append(...rows(more.events));
+    } }, "Load more"),
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Shell: login / tabs
+// ---------------------------------------------------------------------------
+
+const TABS = [
+  ["overview", "Overview"], ["users", "Users"], ["invites", "Invites"],
+  ["gifts", "Gift Codes"], ["chat", "Chat"], ["reports", "Reports"], ["events", "Events"],
+];
+let activeTab = "overview";
+
+async function showTab(name) {
+  activeTab = name;
+  for (const b of $("#nav").children) b.classList.toggle("on", b.dataset.tab === name);
+  main.replaceChildren("Loading…");
+  try {
+    await views[name]();
+  } catch (e) {
+    main.replaceChildren(el("div", { class: "msg err" }, e.message));
+  }
+}
+
+function renderNav() {
+  const nav = $("#nav");
+  nav.style.display = "";
+  nav.replaceChildren(...TABS.map(([name, label]) =>
+    el("button", { "data-tab": name, onclick: () => showTab(name) }, label)));
+  // Open-report count on the Reports tab, refreshed on load only — cheap.
+  api("/api/admin/overview").then((o) => {
+    if (o.totals.openReports > 0) {
+      const btn = [...nav.children].find((b) => b.dataset.tab === "reports");
+      btn.append(el("span", { class: "badge" }, o.totals.openReports));
+    }
+  }).catch(() => undefined);
+}
+
+function renderLogin(message) {
+  $("#nav").style.display = "none";
+  $("#logout").style.display = "none";
+  $("#who").textContent = "";
+  const err = el("div", { class: "msg err" }, message ?? "");
+  const user = el("input", { placeholder: "username", autocomplete: "username" });
+  const pass = el("input", { placeholder: "password", type: "password", autocomplete: "current-password" });
+  main.replaceChildren(el("div", { class: "panelbox", id: "login" },
+    el("div", { class: "mark", style: "margin-bottom:12px" }, "PSYRENA ", el("span", {}, "ADMIN")),
+    el("form", { onsubmit: async (e) => {
+      e.preventDefault();
+      try {
+        await api("/api/login", { username: user.value, password: pass.value });
+        boot();
+      } catch (ex) { err.textContent = ex.message; }
+    } }, user, pass, el("button", { type: "submit" }, "Log In")),
+    err,
+  ));
+  user.focus();
+}
+
+async function boot() {
+  me = await api("/api/admin/me").catch(() => ({ loggedIn: false, admin: false }));
+  if (!me.loggedIn) return renderLogin();
+  if (!me.admin) return renderLogin(`${me.username} is not an admin — log in with an admin account.`);
+  $("#who").textContent = me.username;
+  const logout = $("#logout");
+  logout.style.display = "";
+  logout.onclick = async () => { await api("/api/logout", {}); renderLogin(); };
+  renderNav();
+  showTab(activeTab);
+}
+
+boot();
+</script>
+</body>
+</html>
