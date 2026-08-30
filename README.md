@@ -1,3 +1,5 @@
+![Psyrena: the mind is the arena. Three psychologists and a dog face a construct of pink lightning.](.github/banner.jpg)
+
 # PSYRENA
 
 *psy- + arena. Pronounced "sy-REE-nah".*

@@ -8,7 +8,7 @@ below.
 
 Everything under `public/assets/` — 3D models (`.glb`), textures, sprites and
 icons, UI art, voice lines, and music — plus the generated model data in
-`src/proceduralFreud/`.
+`src/proceduralFreud/` and the key art in `.github/` (the README banner).
 
 ## The license
 
