@@ -15,8 +15,8 @@
  * Desktop only — touch uses the corner button's own hold wiring in
  * actionBar.ts (`startBasicHold`), which shares the same rules.
  */
-import { PointerEventTypes } from "@babylonjs/core";
-import type { Scene } from "@babylonjs/core";
+import { PointerEventTypes } from "@babylonjs/core/Events/pointerEvents";
+import type { Scene } from "@babylonjs/core/scene";
 
 /** Beyond this many px of movement the press is a camera orbit, not an attack. */
 const DRAG_CANCEL_PX = 8;

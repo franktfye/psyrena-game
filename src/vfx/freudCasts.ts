@@ -8,6 +8,7 @@ import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { DynamicTexture } from "@babylonjs/core/Materials/Textures/dynamicTexture";
 import { ParticleSystem } from "@babylonjs/core/Particles/particleSystem";
 import { GlowLayer } from "@babylonjs/core/Layers/glowLayer";
+import { vfxGlowOptions } from "../core/quality";
 
 import "@babylonjs/core/Meshes/Builders/discBuilder";
 import "@babylonjs/core/Meshes/Builders/boxBuilder";
@@ -389,13 +390,17 @@ export function createFreudSkillVfx(scene: Scene, hero: TransformNode): FreudSki
   eye.material = eyeMat;
 
   // Bloom restricted to the ult's own meshes so the rest of the scene stays
-  // clean. One layer per factory; goes down with the scene.
-  const ultGlow = new GlowLayer("freudFx_ultGlow", scene);
-  ultGlow.intensity = 1.5;
-  ultGlow.addIncludedOnlyMesh(eye);
-  scene.onDisposeObservable.add(() => {
-    ultGlow.dispose();
-  });
+  // clean. One layer per factory; goes down with the scene. Sized by device
+  // tier (core/quality.ts); skipped on low, where the eye keeps its emissive.
+  const ultGlowOptions = vfxGlowOptions();
+  const ultGlow = ultGlowOptions ? new GlowLayer("freudFx_ultGlow", scene, ultGlowOptions) : null;
+  if (ultGlow) {
+    ultGlow.intensity = 1.5;
+    ultGlow.addIncludedOnlyMesh(eye);
+    scene.onDisposeObservable.add(() => {
+      ultGlow.dispose();
+    });
+  }
 
   // Swarm: tiny glowing motes and mini-eyes orbiting the eye on deterministic
   // radii/speeds/phases — a swirling retinue around the slow, heavy eye.
@@ -434,7 +439,7 @@ export function createFreudSkillVfx(scene: Scene, hero: TransformNode): FreudSki
       yFreq: 1.0 + det(i, 6) * 1.5,
       yPhase: det(i, 7) * Math.PI * 2,
     });
-    ultGlow.addIncludedOnlyMesh(m);
+    ultGlow?.addIncludedOnlyMesh(m);
   }
 
   const wakeAnchor = MeshBuilder.CreateBox("freudFx_eyeWakeAnchor", { size: 0.02 }, scene);

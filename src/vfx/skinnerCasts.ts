@@ -8,6 +8,7 @@ import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { DynamicTexture } from "@babylonjs/core/Materials/Textures/dynamicTexture";
 import { ParticleSystem } from "@babylonjs/core/Particles/particleSystem";
 import { GlowLayer } from "@babylonjs/core/Layers/glowLayer";
+import { vfxGlowOptions } from "../core/quality";
 
 import "@babylonjs/core/Meshes/Builders/discBuilder";
 import "@babylonjs/core/Meshes/Builders/boxBuilder";
@@ -557,20 +558,25 @@ export function createSkinnerSkillVfx(
   // Bloom restricted to Skinner's own glow-worthy meshes so the rest of the
   // scene stays clean (freudFx_ultGlow precedent) — and this is the healer,
   // so the pellets and payout orb get the boost too, not just the ult. One
-  // layer per factory; goes down with the scene.
-  const glow = new GlowLayer("skinnerFx_glow", scene);
-  glow.intensity = 1.2;
-  for (const m of [body, head, beak, ...wings, bloom, orb, ...pellets]) {
-    glow.addIncludedOnlyMesh(m);
+  // layer per factory; goes down with the scene. Sized by device tier
+  // (core/quality.ts); the low tier skips it and the meshes keep their
+  // emissive colour without the bloom.
+  const glowOptions = vfxGlowOptions();
+  const glow = glowOptions ? new GlowLayer("skinnerFx_glow", scene, glowOptions) : null;
+  if (glow) {
+    glow.intensity = 1.2;
+    for (const m of [body, head, beak, ...wings, bloom, orb, ...pellets]) {
+      glow.addIncludedOnlyMesh(m);
+    }
+    // Beads only: a glowing tube blooms into a white-hot stream and the yellow
+    // reads as blown-out light instead of a flow.
+    for (const l of flowLinks) {
+      for (const b of l.beads) glow.addIncludedOnlyMesh(b);
+    }
+    scene.onDisposeObservable.add(() => {
+      glow.dispose();
+    });
   }
-  // Beads only: a glowing tube blooms into a white-hot stream and the yellow
-  // reads as blown-out light instead of a flow.
-  for (const l of flowLinks) {
-    for (const b of l.beads) glow.addIncludedOnlyMesh(b);
-  }
-  scene.onDisposeObservable.add(() => {
-    glow.dispose();
-  });
 
   // Everything starts dark.
   pelletRoot.setEnabled(false);
@@ -824,7 +830,7 @@ export function createSkinnerSkillVfx(
         // Hand the shared spark system back to the hero.
         sparks.emitRate = 0;
         sparks.emitter = sparkAnchor;
-        glow.intensity = 1.2;
+        if (glow) glow.intensity = 1.2;
       } else if (ultT < HOPS_TOTAL) {
         // Which hop are we in? Walk the segments (three entries, cheap).
         let t0 = 0;
@@ -845,7 +851,7 @@ export function createSkinnerSkillVfx(
         // BRIGHTER — the behaviour shaped closer to the target every rep.
         pigeonRoot.scaling.setAll(FX_SCALE * hop.scale * Math.max(0.01, outBack(clamp01(ultT / 0.3))));
         pigeonMat.emissiveColor.copyFrom(PIGEON_TINT).scaleInPlace(1 + idx * 0.35);
-        glow.intensity = 1.2 + idx * 0.5;
+        if (glow) glow.intensity = 1.2 + idx * 0.5;
         // Wingbeats, widest at takeoff, tucking in toward each landing.
         const flap = Math.sin(ultT * 20) * (0.65 - 0.3 * local);
         wingPivots[0]!.rotation.z = -flap;
@@ -865,7 +871,7 @@ export function createSkinnerSkillVfx(
         const bu = clamp01(tb / BLOOM_SECS);
         bloom.scaling.setAll(Math.max(0.01, outBack(clamp01(tb / 0.3)) * (2.5 + 4 * bu)));
         bloomMat.alpha = 0.9 * (1 - sstep(0.35, 1, bu));
-        glow.intensity = 1.2 + 2.6 * (1 - bu);
+        if (glow) glow.intensity = 1.2 + 2.6 * (1 - bu);
         // Triple rings, staggered launches, expanding out from touchdown.
         for (let i = 0; i < ultRings.length; i++) {
           const local = clamp01((bu - i * 0.14) / (1 - i * 0.14));

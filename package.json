@@ -7,13 +7,14 @@
   "description": "Psyrena — 3D co-op boss-fighting RPG. Babylon.js client.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node tools/verify-mobile-budget.mjs",
     "preview": "vite preview --host",
     "server": "node server/index.mjs",
     "typecheck": "tsc --noEmit",
     "verify:budget": "node --experimental-strip-types tools/verify-hero-budget.mjs",
     "assets:ktx2": "node tools/vendor-ktx2.mjs",
-    "assets:meshopt": "node tools/meshopt-assets.mjs"
+    "assets:meshopt": "node tools/meshopt-assets.mjs",
+    "verify:mobile": "node tools/verify-mobile-budget.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "^8.0.0",
