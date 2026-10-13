@@ -1,5 +1,7 @@
 import { createEngine, applyResolutionPolicy, gfxSummary, releaseGraphics } from "./core/engine";
 import { configureTexturePipeline } from "./core/assets";
+import { clearOfflineCacheIfRequested, registerOfflineCache } from "./core/offlineCache";
+import { noteFrame, qualityTier, resetFrameMonitor, setQualityTier } from "./core/quality";
 import { onLoadProgress, resetLoadProgress } from "./core/loadProgress";
 import { SceneManager, type SceneFactory } from "./core/sceneManager";
 import { PerfHud } from "./core/perfHud";
@@ -249,6 +251,8 @@ function showKickedOverlay(): void {
 }
 
 async function main(): Promise<void> {
+  // Before anything can fail: ?nosw must work on a boot a bad cache broke.
+  await clearOfflineCacheIfRequested();
   // Publish the control scheme on <body> so the stylesheet can swap the control
   // legend. Stamped from the same `detectControlScheme()` the controls use, so
   // `?controls=touch` moves the CSS with it — a bare `(pointer: coarse)` media
@@ -498,6 +502,8 @@ async function main(): Promise<void> {
     const scene = await manager.switchTo(id, entry.factory);
     bootBarDone(id);
     hud.attach(scene);
+    // The step-down judge must not count this scene's shader-compile frames.
+    resetFrameMonitor();
     // Published like data-controls: persistent chrome (the left dock) scopes
     // itself per scene with CSS instead of subscribing to the manager.
     document.body.dataset.scene = id;
@@ -509,12 +515,17 @@ async function main(): Promise<void> {
   await go("village");
   // Made it. Nothing wedged, so the recovery buttons must never appear.
   clearTimeout(stallTimer);
+  void registerOfflineCache();
 
   engine.runRenderLoop(() => {
     const active = manager.active;
     if (!active) return;
     active.render();
-    hud.update(active, engine.getDeltaTime() / 1000, backend);
+    const dt = engine.getDeltaTime() / 1000;
+    hud.update(active, dt, backend);
+    // Sustained low fps records a lower quality tier for the next scene build
+    // (core/quality.ts) — the next portal or arena entry, not mid-frame.
+    noteFrame(dt);
   });
 
   /**
@@ -575,6 +586,8 @@ async function main(): Promise<void> {
   Object.assign(window, {
     psyrena: {
       engine, manager, hud, go, SCENES, profile, player, playerHud, social, chat,
+      // psyrena.quality() / psyrena.setQuality("low" | "medium" | "high" | null)
+      quality: qualityTier, setQuality: setQualityTier,
       /**
        * Give the GPU back, then run `then` — for code that is about to
        * navigate. "Switch Character" (ui/leftDock.ts) reloads the page, and

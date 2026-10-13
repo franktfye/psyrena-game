@@ -101,7 +101,7 @@ import { FREUD } from "@shared/heroes/freud";
 import { heroById } from "@shared/heroes";
 import type { Hero, PaletteEntry } from "@shared/types";
 import { BEAT_PERIOD_S, heroHeightM } from "@shared/combat";
-import { isMemoryConstrainedDevice } from "../core/engine";
+import { applyPipelineQuality, sceneGlowOptions } from "../core/quality";
 import { audioUrl } from "../core/audio";
 
 /**
@@ -940,23 +940,18 @@ export function finishVillageRender(
   // Matched to the arena's recipe so the two scenes grade as one game, with the
   // exposure/contrast pulled back: the hub is "the calm between fights" (V3),
   // and it has far more emissive surface area than the arena does.
-  // On memory-constrained phones (see isMemoryConstrainedDevice) the luxury
-  // allocations go first: 4x MSAA multiplies every pipeline render target, and
-  // the glow layer's half-res buffers drop to quarter-res. iOS answers GPU
-  // memory pressure by killing the WebGL context mid-boot, so on an iPhone
-  // these buffers aren't a quality trade — they're the margin between booting
-  // and a black screen. FXAA stays on and covers the missing MSAA well enough
-  // at phone pixel density.
-  const constrained = isMemoryConstrainedDevice();
-  const glow = new GlowLayer(
-    "glow",
-    scene,
-    constrained ? { blurKernelSize: 32, mainTextureRatio: 0.25 } : { blurKernelSize: 48 }
-  );
-  glow.intensity = 0.62;
+  // Device tier (core/quality.ts) decides the luxury allocations: on phones
+  // 4x MSAA goes (it multiplies every pipeline render target) and the glow
+  // layer drops to quarter-res. iOS answers GPU memory pressure by killing the
+  // WebGL context mid-boot, so on an iPhone these buffers aren't a quality
+  // trade — they're the margin between booting and a black screen. The low
+  // tier drops the glow layer outright. FXAA stays on everywhere and covers
+  // the missing MSAA well enough at phone pixel density.
+  const glowOptions = sceneGlowOptions();
+  const glow = glowOptions ? new GlowLayer("glow", scene, glowOptions) : null;
+  if (glow) glow.intensity = 0.62;
 
   const pipeline = new DefaultRenderingPipeline("post", true, scene, [camera]);
-  pipeline.samples = constrained ? 1 : 4;
   pipeline.fxaaEnabled = true;
 
   // Bloom threshold RISES for daylight. At dusk almost nothing but the neon sat
@@ -996,6 +991,8 @@ export function finishVillageRender(
   // other's cosmetics, and aberration costs legibility (doc 05 VFX rule).
   pipeline.chromaticAberrationEnabled = true;
   pipeline.chromaticAberration.aberrationAmount = 4;
+
+  applyPipelineQuality(pipeline);
 }
 
 // ---------------------------------------------------------------------------

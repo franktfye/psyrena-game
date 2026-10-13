@@ -1,5 +1,7 @@
 import { defineConfig, type Plugin } from "vite";
 import { fileURLToPath, URL } from "node:url";
+import { resolve } from "node:path";
+import { precompress } from "./tools/precompress.mjs";
 
 /**
  * Mount the account API (server/app.mjs) directly into the dev server.
@@ -43,6 +45,54 @@ function accountApi(): Plugin {
   };
 }
 
+/**
+ * Brotli/gzip siblings for every compressible file in the build output
+ * (tools/precompress.mjs), served by server/index.mjs per Accept-Encoding.
+ *
+ * Without this the production server sends the boot chunk raw — ~3 MB of JS
+ * over a phone's connection where ~0.6 MB would do. closeBundle runs after
+ * public/ has been copied in, so the HDR environment and wasm transcoders get
+ * compressed alongside the hashed chunks.
+ */
+function precompressBuild(): Plugin {
+  let outDir = "dist";
+  return {
+    name: "psyrena-precompress",
+    apply: "build",
+    configResolved(config) {
+      outDir = resolve(config.root, config.build.outDir);
+    },
+    closeBundle() {
+      const r = precompress(outDir);
+      console.log(`[precompress] ${r.files} files: ${r.rawMB.toFixed(1)} MB -> ${r.brMB.toFixed(1)} MB brotli`);
+    },
+  };
+}
+
+/**
+ * `immutable-assets.json`: every content-hashed file this build emitted.
+ *
+ * server/index.mjs gives exactly these a one-year immutable Cache-Control, and
+ * public/sw.js serves exactly these cache-first. Neither can infer the set from
+ * the path: public/assets/** lands under /assets/ too, with stable unhashed
+ * names whose bytes change between deploys. `enforce: "post"` so files other
+ * plugins emit in generateBundle are already in the bundle when it is listed.
+ */
+function immutableAssetList(): Plugin {
+  return {
+    name: "psyrena-immutable-assets",
+    apply: "build",
+    enforce: "post",
+    generateBundle(_options, bundle) {
+      this.emitFile({
+        type: "asset",
+        fileName: "immutable-assets.json",
+        source: JSON.stringify(Object.keys(bundle).filter((f) => f.startsWith("assets/")).sort()),
+      });
+    },
+  };
+}
+
 // Vite rejects any Host header it does not recognise (DNS-rebinding defence),
 // on the dev server as well as `preview`. If you reach the dev server under any
 // name other than localhost -- a LAN hostname, a Tailscale MagicDNS name, a
@@ -56,7 +106,7 @@ const ALLOWED_HOSTS = [
 ];
 
 export default defineConfig({
-  plugins: [accountApi()],
+  plugins: [accountApi(), immutableAssetList(), precompressBuild()],
   resolve: {
     alias: {
       "@shared": fileURLToPath(new URL("./shared", import.meta.url)),

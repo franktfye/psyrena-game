@@ -43,7 +43,7 @@ import { awaitPartyFightStart } from "../fight/fightReadyGate";
 import { closeLootPanel, reopenLastLoot } from "../ui/lootPanel";
 import { startBossCountdown } from "../ui/bossCountdown";
 import { sstep, fbm, createSoftRingTexture } from "../vfx/softSprites";
-import { isMemoryConstrainedDevice } from "../core/engine";
+import { applyPipelineQuality, sceneGlowOptions } from "../core/quality";
 
 export { PALETTE, warmupShaders };
 
@@ -287,19 +287,15 @@ export async function createLookdevArena(engine: AbstractEngine, heroId?: string
 
   // ---- Post pipeline ----------------------------------------------------
   // This is where "beautiful" actually comes from for this art direction.
-  // Same constrained-phone trims as the village hub (see the note there): drop
-  // MSAA and quarter the glow buffers so iOS doesn't kill the GL context.
-  const constrained = isMemoryConstrainedDevice();
-  const glow = new GlowLayer(
-    "glow",
-    scene,
-    constrained ? { blurKernelSize: 32, mainTextureRatio: 0.25 } : { blurKernelSize: 48 }
-  );
+  // Same device-tier trims as the village hub (see the note there): drop
+  // MSAA and quarter the glow buffers so iOS doesn't kill the GL context;
+  // the low tier goes without glow, bloom, grain and aberration.
+  const glowOptions = sceneGlowOptions();
+  const glow = glowOptions ? new GlowLayer("glow", scene, glowOptions) : null;
   // Slightly hotter bloom so the distant black-hole rings smear softly.
-  glow.intensity = 0.85;
+  if (glow) glow.intensity = 0.85;
 
   const pipeline = new DefaultRenderingPipeline("post", true, scene, [camera]);
-  pipeline.samples = constrained ? 1 : 4;
   pipeline.fxaaEnabled = true;
 
   pipeline.bloomEnabled = true;
@@ -326,6 +322,8 @@ export async function createLookdevArena(engine: AbstractEngine, heroId?: string
 
   pipeline.chromaticAberrationEnabled = true;
   pipeline.chromaticAberration.aberrationAmount = 8;
+
+  applyPipelineQuality(pipeline);
 
   // ---- Motion -----------------------------------------------------------
   let t = 0;
