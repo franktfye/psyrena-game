@@ -34,8 +34,10 @@ import type {
   FightPhaseState,
   FightSnapshot,
   OperantHudState,
+  PsychosocialHudState,
   SfxName,
 } from "@shared/fight/bossFight";
+import { psychosocialStart } from "@shared/fight/psychosocial";
 import type { Hero } from "../../shared/types";
 import { FOCUS, focusCostFor, type CostKind } from "../../shared/fight/costs";
 import type { FightResultResponse } from "../net/economy";
@@ -93,6 +95,8 @@ export interface FightDriver {
   setThreatStance(active: boolean): void;
   readonly threatStanceActive: boolean;
   readonly operant: OperantHudState | null;
+  /** Erikson's rotation as the fight last reported it; null for other kits. */
+  readonly psychosocial: PsychosocialHudState | null;
   /**
    * The boss model reporting the P2 form it is showing. Local only: the sim
    * has no stage clock of its own and learns the answer this way. In remote
@@ -176,7 +180,7 @@ export class LocalFightDriver implements FightDriver {
     // Spent before the sim is asked, and spent even if the sim then refuses —
     // that is what the arena did inline, and a cast whose cost disagrees with
     // whether it happened is the bug this ordering was chosen to avoid.
-    player.spendMana(focusCostFor(this.hero, kind));
+    player.spendMana(focusCostFor(this.hero, kind, opts.paletteIndex));
 
     if (kind === "defense") {
       this.fight.castDefenseAs(this.actorId);
@@ -220,6 +224,10 @@ export class LocalFightDriver implements FightDriver {
 
   get operant(): OperantHudState | null {
     return this.fight.operantFor(this.actorId);
+  }
+
+  get psychosocial(): PsychosocialHudState | null {
+    return this.fight.psychosocialFor(this.actorId);
   }
 
   notifyP2Stage(stage: number): void {
@@ -290,6 +298,7 @@ type WireEvent =
   | { e: "lock"; paletteIndex: number; ms: number; who?: string }
   | { e: "conditioning"; state: ConditioningHudState; who?: string }
   | { e: "operant"; state: OperantHudState; who?: string }
+  | { e: "psychosocial"; state: PsychosocialHudState; who?: string }
   | { e: "flinch"; who?: string }
   | { e: "sfx"; name: SfxName; who?: string }
   | { e: "end"; stats: FightEndStats };
@@ -376,6 +385,7 @@ export class RemoteFightDriver implements FightDriver {
   /** Set when the server could not carry the fight — see FIRST_FRAME_TIMEOUT_MS. */
   private fallback: LocalFightDriver | null = null;
   private operantState: OperantHudState | null;
+  private psychosocialState: PsychosocialHudState | null;
   /** Optimistic until the next frame confirms it — a stance must feel instant. */
   private stance = false;
 
@@ -398,6 +408,8 @@ export class RemoteFightDriver implements FightDriver {
     this.operantState = opts.hero.reinforcement
       ? { contingency: "positive", consequence: "reinforcement" }
       : null;
+    // Same reason for a life-cycle kit: stage 1 is up before any event.
+    this.psychosocialState = opts.hero.psychosocial ? psychosocialStart() : null;
   }
 
   tick(dt: number): void {
@@ -551,6 +563,12 @@ export class RemoteFightDriver implements FightDriver {
             h.operantChanged?.(ev.state);
           }
           break;
+        case "psychosocial":
+          if (mine(ev.who)) {
+            this.psychosocialState = ev.state;
+            h.psychosocialChanged?.(ev.state);
+          }
+          break;
         case "flinch":
           if (mine(ev.who)) h.playerHitReaction();
           break;
@@ -625,6 +643,10 @@ export class RemoteFightDriver implements FightDriver {
 
   get operant(): OperantHudState | null {
     return this.fallback ? this.fallback.operant : this.operantState;
+  }
+
+  get psychosocial(): PsychosocialHudState | null {
+    return this.fallback ? this.fallback.psychosocial : this.psychosocialState;
   }
 
   notifyP2Stage(stage: number): void {

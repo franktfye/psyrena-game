@@ -40,6 +40,16 @@ import {
 } from "../combat.ts";
 import type { BossFightScript, FightPhaseId, SimAllySpec } from "../bosses/nightmare.ts";
 import type { Hero } from "../types.ts";
+import {
+  castAddon,
+  castLifeStage,
+  castVirtue,
+  psychosocialStart,
+  type PsychosocialHudState,
+  type PsychosocialState,
+} from "./psychosocial.ts";
+
+export type { PsychosocialHudState } from "./psychosocial.ts";
 
 export type FightPhaseState = "idle" | FightPhaseId | "dead";
 
@@ -147,6 +157,12 @@ export interface FightHooks {
    * quadrant; the sim stays ignorant of icons, same as conditioning.
    */
   operantChanged?(state: OperantHudState, actorId?: string): void;
+  /**
+   * Erikson's rotation moved (stage armed, pair completed, add-on granted or
+   * spent, virtues released). The bar relabels keys 1/2/LMB from it — the
+   * stage and virtue names ARE the lesson, so they must track the sim exactly.
+   */
+  psychosocialChanged?(state: PsychosocialHudState, actorId?: string): void;
   /** Hit reaction on the hero model, when one is rigged. */
   playerHitReaction(actorId?: string): void;
   /**
@@ -511,12 +527,38 @@ interface FightActor {
   fiTickers: { nextAt: number; until: number }[];
   viTickers: { nextRollAt: number; until: number }[];
 
+  // ---- life-cycle rotation (Erikson, `Hero.psychosocial`) ------------------
+  // null for every other kit. The rules are shared/fight/psychosocial.ts.
+  psycho: PsychosocialState | null;
+
   /**
    * Dream Analysis payout: the total is fixed at cast, but nothing lands
    * until the eye reaches the boss (`landUltimate`) — then it deals its
    * damage in ticks, one float per tick, instead of one instant slab.
    */
   ultTicks: { perTick: number; left: number; nextAt: number } | null;
+
+  // ---- attachment effects (Ainsworth's kit, but generic effect kinds) ----
+  /** `team.immunity`: boss hits on this actor land nowhere until then. */
+  immuneUntil: number;
+  /** `self.stagger`: hits taken until then are deferred, not dropped. */
+  staggerUntil: number;
+  /** Seconds a deferred hit bleeds out over. */
+  staggerSpreadS: number;
+  /** Deferred hits still bleeding: per-second rate and what is left. */
+  staggerPool: { perS: number; left: number }[];
+  /** Bled damage not yet applied — flushed twice a second, not per frame. */
+  staggerAccum: number;
+  staggerFlushAt: number;
+  /** `heal.cut.self`: healing received is cut by `healCut` until then. */
+  healCutUntil: number;
+  healCut: number;
+  /** Last time a hit actually took HP (Sensitivity answers it). */
+  lastHitAt: number;
+  /** Recent palette casts, for `requiresVariety` gates. */
+  styleLog: { id: string; t: number }[];
+  /** Per-entry ready time for palette entries with their own `cooldownMs`. */
+  paletteReadyAt: Map<string, number>;
 }
 
 interface MarkInstance {
@@ -669,6 +711,8 @@ export class BossFight {
     // A reinforcement kit opens with a live quadrant (Positive/Reinforcement)
     // before any button is pressed — put its readout up from the first frame.
     for (const a of this.actors) if (a.input) this.emitOperant(a);
+    // …and so does a life-cycle kit: stage 1 is up before the first press.
+    for (const a of this.actors) if (a.input) this.emitPsychosocial(a);
   }
 
   /**
@@ -750,7 +794,19 @@ export class BossFight {
       rsStacks: [],
       fiTickers: [],
       viTickers: [],
+      psycho: hero?.psychosocial ? psychosocialStart() : null,
       ultTicks: null,
+      immuneUntil: -1,
+      staggerUntil: -1,
+      staggerSpreadS: 0,
+      staggerPool: [],
+      staggerAccum: 0,
+      staggerFlushAt: 0,
+      healCutUntil: -1,
+      healCut: 0,
+      lastHitAt: -1,
+      styleLog: [],
+      paletteReadyAt: new Map(),
     };
   }
 
@@ -869,6 +925,12 @@ export class BossFight {
   castBasicAs(actorId: string, beat: number): PendingHit | null {
     const a = this.actorBy(actorId);
     if (!a?.hero || !this.canAct(a)) return null;
+    // Erikson's basic is an ADD-ON: one per Life Stage or Virtue cast. With
+    // none banked the press is refused like a gated button — null, no cost.
+    if (a.psycho) {
+      if (!castAddon(a.psycho)) return null;
+      this.emitPsychosocial(a);
+    }
     const effBeat = this.beatOf(a, beat);
     const cond = a.hero.conditioning;
     if (cond && a.hero.basic.effects.some((e) => e.kind === "pairing.bank")) {
@@ -902,6 +964,21 @@ export class BossFight {
       a.rsStacks = a.rsStacks.filter((u) => u > this.simT);
       basicBase *= 1 + rf.responseStrength.damagePerStack * a.rsStacks.length;
     }
+    // Sensitivity (Ainsworth's sensitivity scale): answer the signal PROMPTLY.
+    // A basic within the window after a teammate is hit also heals whoever
+    // was hit most recently — sensitivity is timing, not volume.
+    const sens = a.hero.basic.effects.find((e) => e.kind === "sensitivity.respond");
+    if (sens) {
+      const windowS = (sens.durationMs ?? 1_500) / 1000;
+      const signal = this.actors
+        .filter((c) => c.alive && c.lastHitAt >= 0 && this.simT - c.lastHitAt <= windowS)
+        .sort((x, y) => y.lastHitAt - x.lastHitAt)[0];
+      if (signal) {
+        signal.lastHitAt = -1; // one answer per signal
+        this.healCombatant(signal, sens.magnitude ?? 0, "Sensitivity", a);
+        this.hooks.defenseProc?.("Sensitivity", a.id);
+      }
+    }
     const { damage, crit } = this.playerHit(a, basicBase, effBeat, false);
     return { damage, crit, appliesMark: false, grantsDebuffStack: false };
   }
@@ -927,6 +1004,19 @@ export class BossFight {
     // Gated entries (Pavlov's CS) are dark until the boss carries the state —
     // a null here is "the button is grey", not an error.
     if (entry.requiresBossState && !this.bossStateActive(a, entry.requiresBossState)) return null;
+    // Own cooldown (the server holds the same line in cooldownSecondsFor).
+    if (this.simT < (a.paletteReadyAt.get(entry.id) ?? -1)) return null;
+    // Variety gate: enough DIFFERENT other entries cast inside the window.
+    if (entry.requiresVariety) {
+      const since = this.simT - entry.requiresVariety.withinMs / 1000;
+      const seen = new Set(a.styleLog.filter((s) => s.t >= since && s.id !== entry.id).map((s) => s.id));
+      if (seen.size < entry.requiresVariety.distinct) return null;
+    }
+    a.styleLog = a.styleLog.filter((s) => s.t >= this.simT - 30).concat({ id: entry.id, t: this.simT });
+    if (entry.cooldownMs) {
+      a.paletteReadyAt.set(entry.id, this.simT + entry.cooldownMs / 1000);
+      this.hooks.lockPaletteSlot(paletteIndex, entry.cooldownMs, a.id);
+    }
 
     let grantsDebuffStack = false;
     // Marks: palette kits mint one per cast; chain kits ONLY via an explicit
@@ -979,8 +1069,150 @@ export class BossFight {
     }
 
     this.applyPaletteEffects(a, entry.effects);
-    const { damage, crit } = this.playerHit(a, entry.base, this.beatOf(a, beat), true);
+    const base = this.psychosocialBase(a, entry);
+    const { damage, crit } = this.playerHit(a, base, this.beatOf(a, beat), true);
     return { damage, crit, appliesMark, grantsDebuffStack, markCount };
+  }
+
+  /**
+   * Erikson's keys 1 and 2: advance the rotation and say what the cast is
+   * worth. Key 1 always pays its base; key 2 pays its base only as the
+   * matched half of a pair — pressed with no stage armed it is the weak hit.
+   * Every other entry passes straight through.
+   */
+  private psychosocialBase(a: FightActor, entry: Hero["palette"][number]): number {
+    const spec = a.hero?.psychosocial;
+    const ps = a.psycho;
+    if (!spec || !ps) return entry.base;
+    if (entry.effects.some((e) => e.kind === "psychosocial.stage")) {
+      castLifeStage(ps);
+      this.emitPsychosocial(a);
+      return entry.base;
+    }
+    if (entry.effects.some((e) => e.kind === "psychosocial.virtue")) {
+      const { matched, stage } = castVirtue(ps, spec);
+      const row = spec.stages[stage]!;
+      // The pair, named over the boss — the line the kit exists to teach.
+      this.hooks.defenseProc?.(
+        matched ? `${row.crisis} → ${row.virtue}` : `${row.virtue} grows from ${row.short}: press 1 first`,
+        a.id
+      );
+      if (matched && spec.pairFocusRefund > 0) {
+        this.hooks.gainFocus?.(spec.pairFocusRefund, a.id);
+        this.hooks.defenseProc?.(`+${spec.pairFocusRefund} Focus`, a.id);
+      }
+      if (matched) {
+        this.hooks.playerBuff(
+          `Virtues ${ps.virtues}/${spec.maxVirtues}`,
+          3_600_000,
+          "buff",
+          "virtues",
+          "virtues",
+          `Virtues banked by completed stages. Life Review (F) spends them all: ${a.hero!.ultimate.perMark} damage each.`,
+          a.id
+        );
+      }
+      this.emitPsychosocial(a);
+      return matched ? entry.base : entry.base * spec.unmatchedVirtueMult;
+    }
+    return entry.base;
+  }
+
+  /**
+   * Effect kinds any slot may carry — palette, defense floor, chain or
+   * ultimate. Hero-engine kinds (pairings, schedules, the operant toggles)
+   * stay with their own resolvers; these are the plain ones, and most arrived
+   * with Ainsworth's kit, the attachment styles' reunions:
+   *
+   *  - `mitigation.grant`  self/team damage-taken cut (Pavlov's UCS first)
+   *  - `taunt`             the boss locks onto the caster (Generalization first)
+   *  - `team.cleanse`      lifts Fixation off every living teammate
+   *  - `team.amp`          a team damage window on the overheal Amp term
+   *  - `threat.drop`       the caster sheds a share of their threat
+   *  - `self.stagger`      hits taken are deferred and bleed out over N s
+   *  - `heal.cut.self`     healing the caster receives is cut
+   *  - `team.immunity`     boss hits on every OTHER teammate land nowhere
+   */
+  private applySharedEffects(
+    a: FightActor,
+    effects: readonly { kind: string; magnitude?: number; durationMs?: number; target?: string }[]
+  ): void {
+    for (const e of effects) {
+      const until = this.simT + (e.durationMs ?? 0) / 1000;
+      const secs = (e.durationMs ?? 0) / 1000;
+      if (e.kind === "mitigation.grant") {
+        a.mitigations.push({ magnitude: e.magnitude ?? 0, until, target: e.target === "team" ? "team" : "self" });
+      } else if (e.kind === "taunt") {
+        // Where the boss is LOOKING is boss state, so the window and its owner
+        // live on the fight, not the actor.
+        this.tauntUntil = until;
+        this.tauntActorId = a.id;
+        this.hooks.announce(`${this.script.displayName} wheels on ${a.name} — taunted!`);
+      } else if (e.kind === "team.cleanse") {
+        for (const c of this.actors) {
+          if (!c.alive || c.fixationUntil <= this.simT) continue;
+          c.fixationUntil = -1;
+          this.hooks.defenseProc?.("Cleansed", c.id);
+          this.hooks.playerBuff("Fixation — damage −30%", 1, "debuff", "fixation", undefined, "", c.id);
+        }
+      } else if (e.kind === "team.amp") {
+        // Rides the overheal Amp term (capped at COMBAT.maxAmp with it), so
+        // two damage windows can never stack past what overheal already may.
+        this.ampEvents.push({ amp: e.magnitude ?? 0, until });
+        this.hooks.playerBuff(
+          `Exploration — team +${Math.round((e.magnitude ?? 0) * 100)}%`,
+          e.durationMs ?? 0,
+          "buff",
+          "exploration",
+          "exploration",
+          `A secure base to explore from: the whole team deals +${Math.round((e.magnitude ?? 0) * 100)}% damage for ${secs} s.`,
+          a.id
+        );
+      } else if (e.kind === "threat.drop") {
+        a.threat *= 1 - (e.magnitude ?? 0);
+      } else if (e.kind === "self.stagger") {
+        a.staggerUntil = until;
+        a.staggerSpreadS = e.magnitude ?? 4;
+        this.hooks.playerBuff(
+          "Masked Distress",
+          e.durationMs ?? 0,
+          "buff",
+          "masked_distress",
+          undefined,
+          `Looks calm, isn't: hits you take for ${secs} s are deferred and bleed out over ${a.staggerSpreadS} s instead of landing at once (Sroufe & Waters, 1977: avoidant infants' heart rates rise on reunion).`,
+          a.id
+        );
+      } else if (e.kind === "heal.cut.self") {
+        a.healCutUntil = until;
+        a.healCut = e.magnitude ?? 0;
+        this.hooks.playerBuff(
+          `Resistant — healing received −${Math.round(a.healCut * 100)}%`,
+          e.durationMs ?? 0,
+          "debuff",
+          "resistant",
+          "resistant",
+          `Wants comfort and resists it: healing you receive is cut ${Math.round(a.healCut * 100)}% for ${secs} s.`,
+          a.id
+        );
+      } else if (e.kind === "team.immunity") {
+        let n = 0;
+        for (const c of this.actors) {
+          if (!c.alive || c === a) continue;
+          c.immuneUntil = until;
+          n++;
+          this.hooks.playerBuff(
+            "Sheltered — immune to the boss",
+            e.durationMs ?? 0,
+            "buff",
+            "sheltered",
+            "sheltered",
+            `${a.name} throws herself in front: the boss's attacks cannot touch you for ${secs} s. She is not covered herself.`,
+            c.id
+          );
+        }
+        if (n > 0) this.hooks.announce(`${a.name} shelters the team — ${secs} s of immunity!`);
+      }
+    }
   }
 
   /** Non-damage riders a palette entry carries — UCS's window, CS's consume. */
@@ -988,6 +1220,7 @@ export class BossFight {
     a: FightActor,
     effects: readonly { kind: string; magnitude?: number; durationMs?: number; target?: string }[]
   ): void {
+    this.applySharedEffects(a, effects);
     const cond = a.hero?.conditioning;
     const rf = a.hero?.reinforcement;
     for (const e of effects) {
@@ -1008,12 +1241,6 @@ export class BossFight {
           "Unconditioned response window: the food is out and the boss salivates. Ring the bell (basic attack) just before or during this window to bank a Pairing.",
           a.id
         );
-      } else if (e.kind === "mitigation.grant") {
-        a.mitigations.push({
-          magnitude: e.magnitude ?? 0,
-          until: this.simT + (e.durationMs ?? 0) / 1000,
-          target: e.target === "team" ? "team" : "self",
-        });
       } else if (e.kind === "conditioned.consume" && cond) {
         a.conditionedUntil = -1;
         this.emitConditioning(a);
@@ -1211,6 +1438,17 @@ export class BossFight {
     return this.operantFor(this.primary.id);
   }
 
+  /** Erikson's rotation for one actor, or null for any other kit. */
+  psychosocialFor(actorId: string): PsychosocialHudState | null {
+    const a = this.actorBy(actorId);
+    return a?.psycho ? { ...a.psycho } : null;
+  }
+
+  private emitPsychosocial(a: FightActor): void {
+    if (!a.psycho) return;
+    this.hooks.psychosocialChanged?.({ ...a.psycho }, a.id);
+  }
+
   operantFor(actorId: string): OperantHudState | null {
     const a = this.actorBy(actorId);
     return a?.hero?.reinforcement
@@ -1406,8 +1644,13 @@ export class BossFight {
       });
     }
 
+    // Plain kinds on a defense are part of the floor too (Safe Haven's
+    // cleanse), not a rider to roll for.
+    const floorKinds = new Set(["team.cleanse"]);
+    this.applySharedEffects(a, ability.effects.filter((e) => floorKinds.has(e.kind)));
+
     // --- the rider: flavour on top, never instead of ------------------------
-    const pool = ability.effects;
+    const pool = ability.effects.filter((e) => !floorKinds.has(e.kind));
     const pick = pool[Math.floor(Math.random() * pool.length)];
     const rider = pick?.kind.split(".")[0];
     const label = rider ? `${ability.name}: ${rider}` : ability.name;
@@ -1462,6 +1705,7 @@ export class BossFight {
       ability.mitigation
         ? `cuts damage taken ${Math.round(ability.mitigation.magnitude * 100)}% for ${ability.mitigation.durationMs / 1000} s`
         : "",
+      ability.effects.some((e) => e.kind === "team.cleanse") ? "lifts Fixation off the whole team" : "",
     ]
       .filter(Boolean)
       .join(" and ");
@@ -1469,7 +1713,10 @@ export class BossFight {
       label,
       ability.mitigation?.durationMs ?? 6_000,
       "buff",
-      rider ?? "defense",
+      // A rider-less defense (Erikson's Moratorium) wears its own skill icon;
+      // there is no generic "defense" tile, and asking for one 404s on every
+      // buff-bar repaint.
+      rider ?? iconSlug(ability.id),
       undefined,
       [floorDesc ? `Guaranteed floor: ${floorDesc}.` : "", rider ? riderDesc[rider] ?? "" : ""]
         .filter(Boolean)
@@ -1516,15 +1763,11 @@ export class BossFight {
         a.id
       );
     }
+    // Taunt (Generalization: the boss fixes on the flying clock's owner),
+    // threat drops and the rest of the plain kinds resolve in one place.
+    this.applySharedEffects(a, ability.effects);
     for (const e of ability.effects) {
-      if (e.kind === "taunt") {
-        // Generalization: the boss fixes on the flying clock's owner, threat
-        // table be damned, for the duration. Where the boss is LOOKING is boss
-        // state, so the window and its owner live on the fight, not the actor.
-        this.tauntUntil = this.simT + (e.durationMs ?? 0) / 1000;
-        this.tauntActorId = a.id;
-        this.hooks.announce(`${this.script.displayName} wheels on ${a.name} — taunted!`);
-      } else if (e.kind === "vulnerability") {
+      if (e.kind === "vulnerability") {
         // Boss-side damage-taken term (the P3-armor slot), NOT team Amp —
         // this is the sheet's assumed attack buff, sourced (pavlov.ts S3).
         this.vulnUntil = this.simT + (e.durationMs ?? 0) / 1000;
@@ -1570,7 +1813,9 @@ export class BossFight {
     const a = this.actorBy(actorId);
     if (!a?.hero || !this.canAct(a)) return 0;
     const ult = a.hero.ultimate;
-    const own = this.marks.length;
+    // Erikson's Life Review spends HIS virtues; every other ultimate spends
+    // the team's Mark board.
+    const own = a.psycho ? a.psycho.virtues : this.marks.length;
     const resolved = resolveUltimate({
       // The 30% direct share — what pressing F with a thin board is worth.
       direct: ult.base,
@@ -1585,9 +1830,25 @@ export class BossFight {
     // Latte + pet Attack scalars on the whole payout — same terms every playerHit pays.
     const damage = resolved.damage * a.potionDamage * a.petDamage;
     const marksConsumed = resolved.marksConsumed;
-    this.marks.splice(0, marksConsumed);
+    if (a.psycho) {
+      a.psycho.virtues -= marksConsumed;
+      this.emitPsychosocial(a);
+      this.hooks.playerBuff(
+        `Virtues ${a.psycho.virtues}/${a.hero.psychosocial?.maxVirtues ?? 8}`,
+        a.psycho.virtues > 0 ? 3_600_000 : 1,
+        "buff",
+        "virtues",
+        "virtues",
+        "Virtues banked by completed stages. Life Review (F) spends them all.",
+        a.id
+      );
+    } else {
+      this.marks.splice(0, marksConsumed);
+    }
     // Tank ultimates pay 25% of the slot as a team heal alongside the damage.
     if (ult.heal) this.healParty(a, ult.heal, ult.healTarget ?? "self", ult.name);
+    // Plain kinds (Earned Security's cleanse and team window) resolve here.
+    this.applySharedEffects(a, ult.effects);
     for (const e of ult.effects) {
       if (e.kind === "zone.extinction") {
         // The dome: a boss-side OUTGOING cut (everything inside takes less),
@@ -1659,7 +1920,11 @@ export class BossFight {
       `${ult.name} is resolving — the ultimate's payout window. Its damage or healing lands over the next moments.`,
       a.id
     );
-    if (marksConsumed > 0) {
+    if (marksConsumed > 0 && a.psycho) {
+      this.hooks.announce(
+        `${a.name} looks back on ${marksConsumed} ${marksConsumed === 1 ? "virtue" : "virtues"} — ${ult.name} unfolds for ${Math.round(damage)}!`
+      );
+    } else if (marksConsumed > 0) {
       // Mark noun and skill name come from the kit — "Analysis Marks — Dream
       // Analysis" for Freud, "Conditioning Marks — Extinction" for Pavlov.
       const markNoun = a.hero.palette[0]?.markType ?? "analysis";
@@ -1743,6 +2008,21 @@ export class BossFight {
       // CONDITIONED decaying un-lights the CS button — the bar needs the edge.
       if (a.condWasActive && this.simT >= a.conditionedUntil) this.emitConditioning(a);
       a.mitigations = a.mitigations.filter((m) => m.until > this.simT);
+      // Masked Distress bleeding out, batched to two floats a second.
+      if (a.staggerPool.length) {
+        for (const p of a.staggerPool) {
+          const d = Math.min(p.left, p.perS * dt);
+          p.left -= d;
+          a.staggerAccum += d;
+        }
+        a.staggerPool = a.staggerPool.filter((p) => p.left > 1e-6);
+      }
+      if (a.staggerAccum > 0 && (this.simT >= a.staggerFlushAt || a.staggerPool.length === 0)) {
+        a.staggerFlushAt = this.simT + 0.5;
+        const d = a.staggerAccum;
+        a.staggerAccum = 0;
+        if (a.alive) this.loseHp(a, d, false);
+      }
     }
     this.debuffs = this.debuffs.filter((d) => d.until > this.simT);
     this.ampEvents = this.ampEvents.filter((a) => a.until > this.simT);
@@ -2094,6 +2374,11 @@ export class BossFight {
   }
 
   private hitCombatant(c: FightActor, incoming: number): void {
+    // Sheltered (Ainsworth's Disorganized): the hit lands nowhere at all.
+    if (this.simT < c.immuneUntil) {
+      this.hooks.defenseProc?.("Sheltered", c.id);
+      return;
+    }
     // The Defense Mechanism riders are the TARGET's own — a scripted ally has
     // no kit and therefore never carries one.
     if (c.absorbNextHit) {
@@ -2128,10 +2413,26 @@ export class BossFight {
       this.hooks.announce(`Sublimation turns the blow into Focus (+${Math.round(dmg)})!`);
       return;
     }
+    // Masked Distress (Avoidant): the mitigated hit is deferred, not dropped —
+    // it bleeds out over the spread, so the total taken is unchanged.
+    if (this.simT < c.staggerUntil && c.staggerSpreadS > 0) {
+      c.staggerPool.push({ perS: dmg / c.staggerSpreadS, left: dmg });
+      this.hooks.defenseProc?.("Masked Distress", c.id);
+      return;
+    }
+    this.loseHp(c, dmg, true);
+  }
+
+  /**
+   * HP leaves a combatant: stats, floats, the death edge. `reaction` is a
+   * real hit (the flinch plays); the Masked-Distress bleed passes false.
+   */
+  private loseHp(c: FightActor, dmg: number, reaction: boolean): void {
     const before = c.hp;
     c.hp = Math.max(0, c.hp - dmg);
     const lost = before - c.hp;
     c.statTaken += lost;
+    if (lost > 0) c.lastHitAt = this.simT;
     if (lost > 0) this.hooks.combatantDamaged?.(c.name, lost, c.isPlayer, c.id);
     // A real hit resets the Negative-contingency clean streak — dodging is
     // only reinforced while it is actually happening. Every watching engine's
@@ -2141,7 +2442,7 @@ export class BossFight {
       this.statDamageTaken += lost;
       this.hooks.damagePlayer(dmg, c.id);
       // The killing blow plays the death pose, not a flinch.
-      if (c.hp > 0) this.hooks.playerHitReaction(c.id);
+      if (c.hp > 0 && reaction) this.hooks.playerHitReaction(c.id);
     }
     if (c.hp <= 0 && c.alive) {
       c.alive = false;
@@ -2180,6 +2481,8 @@ export class BossFight {
   private healCombatant(c: FightActor, amount: number, label: string, src: FightActor | null): number {
     if (!c.alive) return 0;
     if (src) amount *= src.potionHeal * src.petHeal;
+    // Resistant (Ambivalent): comfort offered, comfort resisted.
+    if (this.simT < c.healCutUntil) amount *= 1 - c.healCut;
     const missing = c.hpMax - c.hp;
     const healed = Math.min(missing, amount);
     c.hp += healed;

@@ -44,13 +44,22 @@ import {
   basicProjectileStyle,
   createHeroSkillVfx,
   paletteTint,
+  paletteDressing,
   ultimateTint,
+  ultimateDressing,
   type HeroSkillVfx,
 } from "../vfx/heroCasts";
 import type { FreudCastKind } from "../vfx/freudCasts";
 import { createDamageNumbers } from "../vfx/damageNumbers";
 import { createAllyBars, type AllyBars } from "../ui/allyBars";
-import { BossFight, type FightHooks, type FightSnapshot } from "@shared/fight/bossFight";
+import {
+  BossFight,
+  type FightHooks,
+  type FightSnapshot,
+  type PsychosocialHudState,
+} from "@shared/fight/bossFight";
+import { psychosocialFaces } from "../ui/psychosocialFaces";
+import { stageBannerFor } from "../ui/stageBanner";
 import {
   LocalFightDriver,
   RemoteFightDriver,
@@ -66,9 +75,9 @@ import { openLootResult, stashLootResult } from "../ui/lootPanel";
 import { refreshImaginz, refreshProgress, refreshStance } from "../ui/playerHud";
 import { BossFrame } from "./bossFrame";
 import { STAGE_DETAIL } from "../ui/heroLore";
-import { loadArenaHero, type ArenaHero, type ArenaCastKind } from "./arenaHero";
+import { SKILL_ICON_HEROES, loadArenaHero, stanceKey, type ArenaHero, type ArenaCastKind } from "./arenaHero";
 import { VillageClient, type VillagePlayer } from "../net/village";
-import { createHeroVoice } from "../scenes/villageHub";
+import { createHeroVoice, voiceKeyFor } from "../scenes/villageHub";
 import { createPetSlot, petForHero } from "../scenes/petFollower";
 import type { NightmareBoss } from "../scenes/nightmareBoss";
 
@@ -282,7 +291,9 @@ export async function setupArenaCombat(
 
   // ---- action bar + frame (DOM; skipped in headless soak runs) ---------------
   const touch = detectControlScheme() === "touch";
-  const ICONS = `/assets/ui/skills/${HERO.id}`;
+  const ICONS = SKILL_ICON_HEROES.has(HERO.id) ? `/assets/ui/skills/${HERO.id}` : null;
+  /** A skill icon URL, or undefined for a hero whose icon set is not drawn yet. */
+  const skillIcon = (name: string): string | undefined => (ICONS ? `${ICONS}/${name}.webp` : undefined);
   /** "freud.dream-analysis" → "dream_analysis" — the icon-file naming. */
   const slug = (id: string): string => (id.split(".").pop() ?? id).replace(/-/g, "_");
   /** "Spontaneous Recovery" → "Spontaneous\nRecovery" — two-line bar labels. */
@@ -305,12 +316,14 @@ export async function setupArenaCombat(
   );
   const buffIconUrl = (key?: string): string | undefined => {
     if (!key) return undefined;
-    if (SKILL_BUFF_KEYS.has(key)) return `${ICONS}/${key}.webp`;
+    if (SKILL_BUFF_KEYS.has(key)) return skillIcon(key);
     return `${BUFF_ICONS}/${key}.webp`;
   };
 
   let bar: ActionBar | null = null;
   let frame: BossFrame | null = null;
+  /** Logs a landed palette cast for variety gates; bound once the bar exists. */
+  let noteStyleCast: (id: string) => void = () => {};
 
   // Player death: the body lies where it fell and the bar goes cold; the sim
   // allies fight on until the whole party is down (bossFight decides the loss).
@@ -326,6 +339,12 @@ export async function setupArenaCombat(
    * the result overlay (a DOM panel, so it survives the scene switch).
    */
   const finishAttempt = (res: FightResultResponse | null, win: boolean): void => {
+    // The server says so once, on the win that earned it.
+    if (res?.heroUnlocked) {
+      announceWorld(
+        `${heroById(res.heroUnlocked).displayName} joins your roster — pick them from the hero list.`
+      );
+    }
     if (!headless) {
       if (win) {
         if (res?.lootBox) stashLootResult(res, true);
@@ -351,6 +370,10 @@ export async function setupArenaCombat(
   let onOperant:
     | ((s: { contingency: "positive" | "negative"; consequence: "reinforcement" | "punishment" }) => void)
     | null = null;
+  // …and for Erikson's rotation (keys 1/2/LMB relabel on every press).
+  let onPsychosocial: ((s: PsychosocialHudState) => void) | null = null;
+  /** Erikson's rotation as last reported — keys the stage-specific VO lines. */
+  let lastPsycho: PsychosocialHudState | null = null;
 
   // Gear set bonus + equipped-pet stats, resolved once at fight start — same
   // read-once contract as the potions. The pet Focus stat is client-side
@@ -406,6 +429,7 @@ export async function setupArenaCombat(
   const hooks: FightHooks = {
     conditioningChanged: (s) => onConditioning?.(s),
     operantChanged: (s) => onOperant?.(s),
+    psychosocialChanged: (s) => onPsychosocial?.(s),
     announce: announceWorld,
     setBossPhase: (p) => {
       // The two audible entrances: idle→p1 is the pull the countdown was
@@ -704,13 +728,46 @@ export async function setupArenaCombat(
     // the server charges from the same function. A stance stays free by
     // definition (`ThreatStance.toggle`), which is also what lets a
     // Focus-starved hero drop aggro, exactly when they need it most.
-    const focusCost = (kind: BarSlotDef["kind"]): number => focusCostFor(HERO, kind);
+    const focusCost = (slot: BarSlotDef): number =>
+      focusCostFor(
+        HERO,
+        slot.kind,
+        slot.kind === "palette" ? HERO.palette.findIndex((p) => p.id === slot.id) : undefined
+      );
 
     // ---- slot text, composed from the kit's own data -----------------------
     const BASIC_LABEL: Record<string, string> = {
       freud: "Id\nAttack",
       pavlov: "NS\nBell",
       skinner: "Response\nRate",
+      // Repainted from the rotation on mount — see onPsychosocial below.
+      erikson: "Significant\nRelations",
+      ainsworth: "Sensitivity",
+    };
+    /** The plain shared effect kinds (bossFight applySharedEffects), in words. */
+    const sec = (e: { durationMs?: number }): number => (e.durationMs ?? 0) / 1000;
+    const sharedBit = (e: { kind: string; magnitude?: number; durationMs?: number; target?: string }): string | null => {
+      const pct = Math.round((e.magnitude ?? 0) * 100);
+      switch (e.kind) {
+        case "mitigation.grant":
+          return `${e.target === "team" ? "the team takes" : "you take"} ${pct} percent less damage for ${sec(e)} sec`;
+        case "taunt":
+          return `the boss locks onto you for ${sec(e)} sec`;
+        case "team.cleanse":
+          return "lifts Fixation off every teammate";
+        case "team.amp":
+          return `the whole team deals ${pct} percent more damage for ${sec(e)} sec`;
+        case "threat.drop":
+          return `you shed ${pct} percent of your threat`;
+        case "self.stagger":
+          return `for ${sec(e)} sec, hits you take bleed out over ${e.magnitude ?? 4} sec instead of landing at once`;
+        case "heal.cut.self":
+          return `healing on you is cut ${pct} percent for ${sec(e)} sec`;
+        case "team.immunity":
+          return `every other teammate is immune to the boss for ${sec(e)} sec (not you)`;
+        default:
+          return null;
+      }
     };
     const paletteTooltip = (p: PaletteEntry): string => {
       if (p.answersAxis) {
@@ -718,6 +775,12 @@ export async function setupArenaCombat(
         // P2 form announcements ("NIGHTMARE takes the form of an infant…").
         return `${p.name}. Deals ${p.base} damage and places an Analysis Mark. While the boss shapeshifts: the correct answer when it takes the form of ${STAGE_DETAIL[p.id]?.form ?? "this stage"} — outside the transformation no stage is wrong.`;
       }
+      // Erikson's two keys: the rotation, in one sentence each.
+      const ps = HERO.psychosocial;
+      if (ps && p.effects.some((e) => e.kind === "psychosocial.stage"))
+        return `${p.name}. Deals ${p.base} damage and casts the current life stage, arming its virtue (key 2). One add-on basic attack follows.`;
+      if (ps && p.effects.some((e) => e.kind === "psychosocial.virtue"))
+        return `${p.name}. After key 1: deals ${p.base} damage, completes the stage and banks a virtue for Life Review. Without a stage armed it deals only ${Math.round(p.base * ps.unmatchedVirtueMult)}. One add-on basic attack follows.`;
       // Skinner's schedules deal nothing — say what each delivery contract
       // pays, with the numbers read off the spec so they cannot go stale.
       const rf = HERO.reinforcement;
@@ -734,17 +797,21 @@ export async function setupArenaCombat(
       }
       // Chain-kit entries answer nothing; say what their riders actually do.
       const bits = [`Deals ${p.base} damage`];
+      if (HERO.kit === "palette") bits.push(`places a ${p.markType.charAt(0).toUpperCase()}${p.markType.slice(1)} Mark`);
       for (const e of p.effects) {
-        if (e.kind === "ucr.window")
+        const shared = sharedBit(e);
+        if (shared) bits.push(shared);
+        else if (e.kind === "ucr.window")
           bits.push(`opens the ${(e.durationMs ?? 0) / 1000} s UCR window — ring the bell into it to bank a Pairing`);
-        else if (e.kind === "mitigation.grant")
-          bits.push(`grants the team ${Math.round((e.magnitude ?? 0) * 100)} percent mitigation for ${(e.durationMs ?? 0) / 1000} sec`);
         else if (e.kind === "pairing.focus")
           bits.push(`returns ${e.magnitude ?? 0} Focus for every pairing that lands — a missed window pays none`);
         else if (e.kind === "mark.grant") bits.push(`places ${e.magnitude ?? 1} Conditioning Marks`);
         else if (e.kind === "conditioned-response.stagger")
           bits.push("teaches the Conditioned Response — Anticipation-beat bells stagger the boss");
       }
+      if (p.requiresVariety)
+        bits.push(`needs ${p.requiresVariety.distinct} different styles cast in the last ${p.requiresVariety.withinMs / 1000} sec`);
+      if (p.cooldownMs) bits.push(`${p.cooldownMs / 1000} sec cooldown`);
       return `${p.name}. ${bits.join("; ")}.`;
     };
     const defenseTooltip = (): string => {
@@ -755,6 +822,10 @@ export async function setupArenaCombat(
         bits.push(
           `reduces damage taken by ${Math.round(a.mitigation.magnitude * 100)} percent for ${a.mitigation.durationMs / 1000} sec${a.mitigation.target === "team" ? " (whole team)" : ""}`
         );
+      for (const e of a.effects) {
+        const shared = sharedBit(e);
+        if (shared) bits.push(shared);
+      }
       const RIDER_LINE: Record<string, string> = {
         freud: "One of six mechanisms rides along at random.",
         pavlov: "After Extinction, the rest period restores one free Pairing.",
@@ -768,6 +839,7 @@ export async function setupArenaCombat(
         if (e.kind === "palette.auto-correct")
           bits.push("your next 3 stage casts cannot be wrong, though their Marks count at half value");
         else if (e.kind === "taunt") bits.push(`taunts the boss for ${(e.durationMs ?? 0) / 1000} sec`);
+        else if (e.kind === "threat.drop") bits.push(sharedBit(e)!);
         else if (e.kind === "vulnerability")
           bits.push(`the boss takes ${Math.round((e.magnitude ?? 0) * 100)} percent more damage for ${(e.durationMs ?? 0) / 1000} sec`);
       }
@@ -780,6 +852,9 @@ export async function setupArenaCombat(
         const s = HERO.reinforcement;
         return `${u.name}. The holo pigeon hops teammate to teammate, healthiest first, each landing bigger: heals the team ${u.heal} plus ${s.shaping.perApproximation} for every Approximation consumed (cap ${s.approximation.capPerAlly} per ally). Overheal becomes team Amp.`;
       }
+      if (HERO.psychosocial) {
+        return `${u.name}. Deals ${u.base} damage plus ${u.perMark} for every virtue you have banked (up to ${u.maxMarksConsumed}), then spends them. The stages carry on where they were.`;
+      }
       const bits = [
         `Deals ${u.base} damage plus ${u.perMark} for every Mark consumed, up to ${u.maxMarksConsumed} Marks`,
       ];
@@ -791,6 +866,7 @@ export async function setupArenaCombat(
           );
         else if (e.kind === "conditioning.reset")
           bits.push("extinguishes his own conditioning: Pairings and CS reset");
+        else if (sharedBit(e)) bits.push(sharedBit(e)!);
       }
       return `${u.name}. ${bits.join("; ")}.`;
     };
@@ -816,10 +892,11 @@ export async function setupArenaCombat(
       key,
       label: p.name.replace(" Stage", "").split(" — ")[0] ?? p.name,
       tooltip: paletteTooltip(p),
-      icon: `${ICONS}/${slug(p.id)}.webp`,
+      icon: skillIcon(slug(p.id)),
       // 3 s per stage, on top of the shared 1.5 s GCD — the bar shows
-      // whichever keeps the slot dark longer.
-      cooldownMs: 3_000,
+      // whichever keeps the slot dark longer. An entry with its own cooldown
+      // (Ainsworth's Disorganized, 30 s) shows that instead.
+      cooldownMs: p.cooldownMs ?? 3_000,
       kind: "palette" as const,
     });
     const slots: BarSlotDef[] = [
@@ -827,9 +904,11 @@ export async function setupArenaCombat(
         id: BASIC_ID,
         key: "lmb",
         label: BASIC_LABEL[HERO.id] ?? "Attack",
-        tooltip: HERO.beats
-          ? `Basic attack. Deals ${HERO.basic.base} damage and rides the current beat. Left click.`
-          : `Basic attack. Deals a flat ${HERO.basic.base} damage. Left click.`,
+        tooltip: HERO.psychosocial
+          ? `Add-on attack. Deals ${HERO.basic.base} damage, once after each key 1 or key 2. Named for the people who matter at the current stage. Left click.`
+          : HERO.beats
+            ? `Basic attack. Deals ${HERO.basic.base} damage and rides the current beat. Left click.`
+            : `Basic attack. Deals a flat ${HERO.basic.base} damage. Left click.`,
         cooldownMs: HERO.basic.cooldownMs,
         kind: "basic" as const,
         flat: HERO.beats === undefined,
@@ -837,7 +916,7 @@ export async function setupArenaCombat(
         // on the desktop row — icon face, 44 px square — so the CS swap is a
         // repaint of the same shape. Touch ignores both: circle, text face.
         ...(transformsBasic
-          ? { paletteFace: true, icon: `${ICONS}/${slug(BASIC_ID)}.webp` }
+          ? { paletteFace: true, icon: skillIcon(slug(BASIC_ID)) }
           : {}),
       },
       ...mountedPalette.map((p, i) => paletteSlotDef(p, String(i + 1))),
@@ -845,15 +924,16 @@ export async function setupArenaCombat(
       // is the browser's focus-walk key, and preventDefault-ing it inside a
       // canvas game fights the page for a binding the player cannot see. "4"
       // is free — Pavlov mounts a single palette button, so 2/3/4/5 are all
-      // unused — and it sits where a fourth skill would.
+      // unused — and it sits where a fourth skill would. A kit that fills
+      // 1-4 itself (Ainsworth's four styles) takes the next free number.
       ...(HERO.threatStance
         ? [
             {
               id: HERO.threatStance.id,
-              key: "4",
+              key: stanceKey(mountedPalette.length),
               label: wrapLabel(HERO.threatStance.name),
               tooltip: `${HERO.threatStance.name}. Toggle: while held you bank ${HERO.threatStance.multiplier}x threat per point of damage, so the boss looks at you. Drop it to hand that attention away. Free, no cooldown.`,
-              icon: `${ICONS}/${slug(HERO.threatStance.id)}.webp`,
+              icon: skillIcon(slug(HERO.threatStance.id)),
               cooldownMs: 0,
               kind: "stance" as const,
             },
@@ -870,8 +950,8 @@ export async function setupArenaCombat(
         // The sim opens Positive/Reinforcement, so the buttons offer the
         // opposites.
         icon: HERO.reinforcement
-          ? `${ICONS}/contingency_negative.webp`
-          : `${ICONS}/${slug(HERO.defense.id)}.webp`,
+          ? skillIcon("contingency_negative")
+          : skillIcon(slug(HERO.defense.id)),
         cooldownMs: HERO.defense.cooldownMs,
         kind: "defense",
       },
@@ -881,8 +961,8 @@ export async function setupArenaCombat(
         label: wrapLabel(HERO.chain.name),
         tooltip: chainTooltip(),
         icon: HERO.reinforcement
-          ? `${ICONS}/consequence_punishment.webp`
-          : `${ICONS}/${slug(HERO.chain.id)}.webp`,
+          ? skillIcon("consequence_punishment")
+          : skillIcon(slug(HERO.chain.id)),
         cooldownMs: HERO.chain.cooldownMs,
         kind: "chain",
       },
@@ -891,7 +971,7 @@ export async function setupArenaCombat(
         key: "f",
         label: wrapLabel(HERO.ultimate.name),
         tooltip: ultimateTooltip(),
-        icon: `${ICONS}/${slug(HERO.ultimate.id)}.webp`,
+        icon: skillIcon(slug(HERO.ultimate.id)),
         cooldownMs: HERO.ultimate.cooldownMs,
         kind: "ultimate",
       },
@@ -925,16 +1005,21 @@ export async function setupArenaCombat(
         }
         // Auto-aim: every cast squares the hero onto the boss first.
         hero.faceTarget(BOSS_POINT);
-        hero.cast(slot.kind);
+        hero.cast(slot.kind, slot.id);
         // Teammates' clients play the same gesture (cosmetic only — their
         // sims resolve nothing from it).
         partyNet?.sendCast(slot.id, slot.kind);
         // Packs carry no basic-attack lines and cast() no-ops on an unmapped
         // id, so this fires for every slot without a kind check — exactly the
-        // hub's setupSkillBar contract.
-        voice.cast(slot.id);
+        // hub's setupSkillBar contract. Erikson's 1/2 key on the stage they
+        // cast (`voiceKeyFor`), read before the cast moves the rotation; the
+        // same key tells his skill VFX which stage to light, and the centre
+        // banner flashes the stage or virtue.
+        const castKey = voiceKeyFor(HERO, slot.id, lastPsycho);
+        voice.cast(castKey);
         playCastSfx(slot.id);
-        if (slot.kind !== "basic") skillFx.cast(slot.kind, slot.id);
+        if (slot.kind !== "basic") skillFx.cast(slot.kind, castKey);
+        stageBannerFor(HERO, slot.id, lastPsycho);
 
         // The cast is a round trip now: the gesture, the voice line and the
         // VFX are the press's own feedback, and the PROJECTILE waits for the
@@ -942,6 +1027,14 @@ export async function setupArenaCombat(
         // shows what the server applied, local what its own sim did on land.
         const paletteIndex =
           slot.kind === "palette" ? HERO.palette.findIndex((p) => p.id === slot.id) : undefined;
+        // Erikson's add-on: lit the moment 1/2 goes down and spent the moment
+        // LMB does, so a fast `1 → LMB` is not refused for a server round
+        // trip. The fight's own psychosocialChanged repaints the truth.
+        if (HERO.psychosocial && slot.kind === "palette") bar?.setAvailable(BASIC_ID, true);
+        if (HERO.psychosocial && slot.kind === "basic") bar?.setAvailable(BASIC_ID, false);
+        // Variety gates count the PRESS, as the sim clocks the cast: logging
+        // on the server's reply would add a round trip to an 8 s window.
+        if (slot.kind === "palette") noteStyleCast(slot.id);
         void driver.cast(slot.kind, { paletteIndex }).then((out) => {
           if (!out.ok) {
             // Say why, unless the player can already see it. "refused" is the
@@ -979,7 +1072,7 @@ export async function setupArenaCombat(
               speed: 9,
               lifeSec: 3,
               wobble: 0.35,
-              ...(slot.id === "pavlov.ucs" ? { dressing: "steak" as const } : {}),
+              ...paletteDressing(slot.id),
               target: () => BOSS_POINT,
               onHit: () => {
                 playImpactSfx(slot.id);
@@ -1007,6 +1100,7 @@ export async function setupArenaCombat(
             // itself through the dotTick hook.
             projectiles.fire({
               color: ultimateTint(HERO.id),
+              ...ultimateDressing(HERO.id),
               size: 0.42,
               speed: 10,
               lifeSec: 4,
@@ -1021,6 +1115,8 @@ export async function setupArenaCombat(
         // The touch cluster's word for the wheel: Skinner's palette is his
         // four schedules, not "Stages".
         paletteWord: HERO.reinforcement ? "Schedules" : undefined,
+        // Erikson's 1 and 2 are a rhythm, not a menu — two direct buttons.
+        paletteInline: HERO.psychosocial !== undefined,
         gcdMs: 1_500,
         // Focus gates the cast BEFORE it commits: an empty pool refuses the
         // press (red flash, no cooldown, no GCD) instead of casting for free —
@@ -1028,12 +1124,12 @@ export async function setupArenaCombat(
         // too, so a corpse's key-mash doesn't burn cooldowns. The pool read is
         // the DRIVER's: in a ranked run the server owns it and this store is
         // only a mirror, so asking the store would be asking the prediction.
-        canCast: (slot) => !heroDead && driver.self().focus >= focusCost(slot.kind),
+        canCast: (slot) => !heroDead && driver.self().focus >= focusCost(slot),
         // The red flash says the press failed; this says why. Only the empty
         // pool earns the popup — a dead hero's mash already has a death
         // overlay explaining itself.
         onRefused: (slot) => {
-          if (!heroDead && driver.self().focus < focusCost(slot.kind))
+          if (!heroDead && driver.self().focus < focusCost(slot))
             showCastWarning("Not enough Focus");
         },
       }
@@ -1073,6 +1169,24 @@ export async function setupArenaCombat(
       };
     }
 
+    // ---- Erikson's rotation (keys 1/2/LMB name the stage they cast) --------
+    const psSpec = HERO.psychosocial;
+    if (psSpec) {
+      const stageId = HERO.palette.find((p) => p.effects.some((e) => e.kind === "psychosocial.stage"))?.id;
+      const virtueId = HERO.palette.find((p) => p.effects.some((e) => e.kind === "psychosocial.virtue"))?.id;
+      onPsychosocial = (st): void => {
+        lastPsycho = st;
+        const f = psychosocialFaces(psSpec, st);
+        if (stageId) bar?.setLabel(stageId, f.stage, skillIcon(f.stageIcon));
+        if (virtueId) bar?.setLabel(virtueId, f.virtue, skillIcon(f.virtueIcon));
+        bar?.setLabel(BASIC_ID, f.basic);
+        bar?.setAvailable(BASIC_ID, st.addon);
+        bar?.setCaption(f.caption);
+      };
+      const initial = driver.psychosocial;
+      if (initial) onPsychosocial(initial);
+    }
+
     // ---- Skinner's quadrant toggles (E ⇄ contingency, R ⇄ consequence) -----
     // Each face is its own slot def (replaceSlot refuses same-id swaps, the
     // NS⇄CS precedent), painted from the sim's operantChanged hook. A face
@@ -1093,7 +1207,7 @@ export async function setupArenaCombat(
             next === "negative"
               ? `Switch Contingency to Negative — teammates earn a consequence for every ${rf.negativeCleanSeconds} sec spent taking no damage. Currently Positive: every ${rf.positiveDamagePerProc} damage dealt earns one.`
               : `Switch Contingency to Positive — teammates earn a consequence for every ${rf.positiveDamagePerProc} damage they deal. Currently Negative: every ${rf.negativeCleanSeconds} sec without taking damage earns one.`,
-          icon: `${ICONS}/contingency_${next}.webp`,
+          icon: skillIcon(`contingency_${next}`),
           cooldownMs: HERO.defense.cooldownMs,
           kind: "defense" as const,
           freeOfGcd: true,
@@ -1109,7 +1223,7 @@ export async function setupArenaCombat(
             next === "punishment"
               ? `Switch Consequence to Punishment — every proc grants ${Math.round(rf.procMitigation.magnitude * 100)} percent damage reduction for ${rf.procMitigation.durationMs / 1000} sec. Currently Reinforcement: a proc heals its earner (${rf.procHeal.positive} on Positive, ${rf.procHeal.negative} on Negative).`
               : `Switch Consequence to Reinforcement — every proc heals its earner (${rf.procHeal.positive} on Positive, ${rf.procHeal.negative} on Negative). Currently Punishment: a proc grants mitigation instead. Either way procs bank Approximations.`,
-          icon: `${ICONS}/consequence_${next}.webp`,
+          icon: skillIcon(`consequence_${next}`),
           cooldownMs: HERO.chain.cooldownMs,
           kind: "chain" as const,
           freeOfGcd: true,
@@ -1162,6 +1276,30 @@ export async function setupArenaCombat(
           : `${HERO.displayName.split(" — ")[0]} drops ${stance.name} — aggro cools.`
       );
     };
+    // Variety gates (Ainsworth's Disorganized): the slot is dark until enough
+    // DIFFERENT other styles landed inside its window. The sim holds the same
+    // line; this only keeps the button honest, ticking so it darkens again as
+    // the window lapses.
+    const gatedPalette = HERO.palette.filter((p) => p.requiresVariety);
+    const styleLog: { id: string; t: number }[] = [];
+    const refreshVariety = (): void => {
+      const now = performance.now();
+      for (const p of gatedPalette) {
+        const gate = p.requiresVariety!;
+        const seen = new Set(styleLog.filter((x) => x.t >= now - gate.withinMs && x.id !== p.id).map((x) => x.id));
+        bar?.setAvailable(p.id, seen.size >= gate.distinct);
+      }
+    };
+    noteStyleCast = (id: string): void => {
+      if (!gatedPalette.length) return;
+      styleLog.push({ id, t: performance.now() });
+      if (styleLog.length > 12) styleLog.shift();
+      refreshVariety();
+    };
+    const varietyTimer = gatedPalette.length ? window.setInterval(refreshVariety, 250) : 0;
+    refreshVariety();
+    scene.onDisposeObservable.add(() => window.clearInterval(varietyTimer));
+
     // Paint the resting state once so the button reads as "off", not "broken",
     // and put the same word under the portrait.
     if (stance) {
@@ -1382,7 +1520,8 @@ export async function setupArenaCombat(
       // No faceTarget here: the caster's own client already squared them onto
       // the boss, so the network yaw carries the facing.
       const kind = (REMOTE_CAST_KINDS.has(c.kind) ? c.kind : "basic") as ArenaCastKind;
-      rig.cast(kind);
+      // The slot id picks a per-style clip where the rig ships one.
+      rig.cast(kind, c.id);
 
       // Their magic, on my screen. Mirrors the local bar's own rules below
       // (arenaCombat's ActionBar handler) so the two clients show the same
@@ -1428,7 +1567,7 @@ export async function setupArenaCombat(
           speed: 9,
           lifeSec: 3,
           wobble: 0.35,
-          ...(c.id === "pavlov.ucs" ? { dressing: "steak" as const } : {}),
+          ...paletteDressing(c.id),
           target: () => BOSS_POINT,
         });
       } else if (kind === "chain") {
@@ -1443,6 +1582,7 @@ export async function setupArenaCombat(
       } else {
         kit.projectiles.fire({
           color: ultimateTint(kitDef.id),
+          ...ultimateDressing(kitDef.id),
           size: 0.42,
           speed: 10,
           lifeSec: 4,

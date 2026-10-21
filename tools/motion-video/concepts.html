@@ -1,0 +1,185 @@
+<!doctype html>
+<!--
+  Concept Review, served by tools/motion-video/view.mjs at /concepts.
+
+  Frank's gate between concept art and Tripo: each hero's T-pose plates
+  (front + back) with their version history. Approve a version, or say what to
+  change and refine it (a GPT Image 2.5 edit that keeps everything else).
+  Tripo only ever takes the approved plates (concept.mjs gate).
+-->
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Concept Review</title>
+<style>
+  :root { color-scheme: dark; --bg: #15171b; --panel: #1e2127; --line: #2c3038; --fg: #e6e8ec; --dim: #9aa1ad; --acc: #6aa8ff; --ok: #5fcf86; --warn: #e8b04b; --bad: #ef6b6b; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
+  header { display: flex; gap: 12px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 2; }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
+  header a { color: var(--dim); margin-left: auto; text-decoration: none; }
+  header a:hover { color: var(--fg); }
+  select, button, textarea { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 11px; font: inherit; }
+  button { cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.ok { border-color: var(--ok); color: var(--ok); }
+  button.go { border-color: var(--acc); color: var(--acc); }
+  .badge { padding: 2px 9px; border-radius: 99px; font-size: 12px; border: 1px solid; }
+  .badge.approved { color: var(--ok); border-color: var(--ok); }
+  .badge.pending { color: var(--warn); border-color: var(--warn); }
+  main { display: grid; grid-template-columns: 1fr 340px; gap: 14px; padding: 14px; }
+  .plates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  figure { margin: 0; background: #000; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  figure img { width: 100%; display: block; aspect-ratio: 1; object-fit: contain; background: #0d0f12; }
+  figcaption { padding: 6px 10px; color: var(--dim); font-size: 12px; }
+  aside { display: flex; flex-direction: column; gap: 14px; }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .box h2 { font-size: 13px; margin: 0 0 8px; color: var(--dim); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+  textarea { width: 100%; min-height: 110px; resize: vertical; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .row label { color: var(--dim); }
+  .msg { margin-top: 8px; font-size: 13px; }
+  .msg.err { color: var(--bad); }
+  .msg.busy { color: var(--warn); }
+  .strip { display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 8px; }
+  .ver { flex: 0 0 120px; cursor: pointer; border: 2px solid transparent; border-radius: 8px; background: var(--panel); padding: 4px; }
+  .ver.sel { border-color: var(--acc); }
+  .ver img { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 4px; background: #0d0f12; display: block; }
+  .ver div { font-size: 11px; color: var(--dim); padding: 3px 2px 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+  .ver b { color: var(--fg); }
+  .note { color: var(--dim); font-size: 13px; white-space: pre-wrap; }
+  .empty { padding: 40px; color: var(--dim); }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Concept Review</h1>
+  <select id="hero"></select>
+  <span id="status" class="badge"></span>
+  <a href="/">Motion Viewer →</a>
+</header>
+<main id="main">
+  <section>
+    <div class="plates">
+      <figure><img id="front" alt="front" /><figcaption id="capF">Front</figcaption></figure>
+      <figure><img id="back" alt="back" /><figcaption id="capB">Back</figcaption></figure>
+    </div>
+    <div class="box" style="margin-top:12px">
+      <h2>Versions</h2>
+      <div class="strip" id="strip"></div>
+    </div>
+  </section>
+  <aside>
+    <div class="box">
+      <h2>Approve</h2>
+      <p class="note" id="selNote"></p>
+      <div class="row"><button class="ok" id="approve">Approve</button></div>
+      <p class="note" style="margin-top:8px">Tripo only takes the approved version.</p>
+    </div>
+    <div class="box">
+      <h2>Refine</h2>
+      <textarea id="note" placeholder="What should change? e.g. &quot;make the jacket tweed brown, hair a little shorter, add round glasses&quot;"></textarea>
+      <div class="row">
+        <label><input type="radio" name="view" value="both" checked /> both</label>
+        <label><input type="radio" name="view" value="front" /> front</label>
+        <label><input type="radio" name="view" value="back" /> back only</label>
+      </div>
+      <div class="row"><button class="go" id="refine">Refine</button><span class="note" id="cost"></span></div>
+      <div class="msg" id="msg"></div>
+    </div>
+  </aside>
+</main>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+let state = null, hero = null, sel = null, poll = null;
+
+async function load() {
+  state = await (await fetch("/api/concepts")).json();
+  const names = state.heroes.map((h) => h.hero);
+  if (!names.length) { $("main").innerHTML = '<p class="empty">No concepts yet. Start one with tools/motion-video/concept.mjs new &lt;hero&gt; …</p>'; return; }
+  if ($("hero").options.length !== names.length) {
+    $("hero").replaceChildren(...names.map((n) => new Option(n, n)));
+    hero = new URLSearchParams(location.search).get("hero") || hero || names[0];
+    $("hero").value = hero;
+  }
+  render();
+}
+
+function cur() { return state.heroes.find((h) => h.hero === hero); }
+
+function render() {
+  const h = cur();
+  if (!h) return;
+  const last = h.versions.at(-1);
+  if (sel == null || !h.versions.some((v) => v.v === sel)) sel = last.v;
+  const v = h.versions.find((x) => x.v === sel);
+  const img = (f) => `/concept-img/${hero}/${f}`;
+  $("front").src = img(v.front);
+  $("back").src = img(v.back);
+  $("capF").textContent = `v${v.v} front`;
+  $("capB").textContent = `v${v.v} back`;
+  $("status").className = "badge " + h.status;
+  $("status").textContent = h.status === "approved" ? `approved v${h.approved.v}` : `waiting for approval (v${last.v})`;
+  $("selNote").textContent = `v${v.v}${v.from ? ` (from v${v.from}, ${v.view})` : ""}: ${v.note}`;
+  $("approve").textContent = h.approved?.v === v.v ? `v${v.v} is approved` : `Approve v${v.v}`;
+  $("approve").disabled = h.approved?.v === v.v || !!busy(h);
+  $("refine").textContent = `Refine from v${v.v}`;
+  $("strip").replaceChildren(...h.versions.slice().reverse().map((x) => {
+    const d = document.createElement("div");
+    d.className = "ver" + (x.v === sel ? " sel" : "");
+    d.innerHTML = `<img src="${img(x.front)}" loading="lazy"/><div><b>v${x.v}</b>${h.approved?.v === x.v ? " ✓" : ""} · ${escapeHtml(x.note)}</div>`;
+    d.onclick = () => { sel = x.v; render(); };
+    return d;
+  }));
+  updateCost();
+  const job = h.job;
+  if (busy(h)) {
+    const s = Math.round((Date.now() - job.started) / 1000);
+    $("msg").className = "msg busy";
+    $("msg").textContent = `Refining (${job.view})… ${s}s. A view takes about a minute.`;
+    $("refine").disabled = true;
+    if (!poll) poll = setInterval(load, 3000);
+  } else {
+    $("refine").disabled = false;
+    if (poll) { clearInterval(poll); poll = null; }
+    if (job?.error) { $("msg").className = "msg err"; $("msg").textContent = `Refine failed: ${job.error}`; }
+    else if ($("msg").classList.contains("busy")) { $("msg").className = "msg"; $("msg").textContent = `Done: v${last.v} is ready.`; sel = last.v; render(); }
+  }
+}
+
+const busy = (h) => h.job && !h.job.error;
+const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const view = () => document.querySelector('input[name="view"]:checked').value;
+function updateCost() {
+  const n = view() === "back" ? 1 : 2; // a front change always regenerates the back
+  $("cost").textContent = `${n} image${n > 1 ? "s" : ""} ≈ ${n * state.buzzPerImage} Buzz`;
+}
+document.querySelectorAll('input[name="view"]').forEach((r) => (r.onchange = updateCost));
+
+$("hero").onchange = () => { hero = $("hero").value; sel = null; history.replaceState(null, "", `?hero=${hero}`); $("msg").textContent = ""; render(); };
+
+$("approve").onclick = async () => {
+  if (!confirm(`Approve ${hero} v${sel}? Tripo will build the model from it.`)) return;
+  const r = await fetch(`/api/concepts/${hero}/approve`, { method: "POST", body: JSON.stringify({ version: sel }) });
+  $("msg").className = r.ok ? "msg" : "msg err";
+  $("msg").textContent = r.ok ? `Approved v${sel}.` : (await r.json()).error;
+  await load();
+};
+
+$("refine").onclick = async () => {
+  const note = $("note").value.trim();
+  if (!note) { $("msg").className = "msg err"; $("msg").textContent = "Say what to change first."; return; }
+  const r = await fetch(`/api/concepts/${hero}/refine`, { method: "POST", body: JSON.stringify({ note, view: view(), from: sel }) });
+  if (!r.ok) { $("msg").className = "msg err"; $("msg").textContent = (await r.json()).error; return; }
+  $("note").value = "";
+  $("msg").className = "msg busy";
+  $("msg").textContent = "Refining…";
+  await load();
+};
+
+await load();
+</script>
+</body>
+</html>

@@ -10,7 +10,8 @@ design docs, which are not in this repo (see "What is not in this repo" in
 README.md); these rules are the part every contributor needs.
 
 Rules 1–2 are enforced: `npm run build` ends with
-`tools/verify-mobile-budget.mjs` and fails on a violation.
+`tools/verify-mobile-budget.mjs` and fails on a violation. Rule 5 is enforced
+for heroes: `tools/verify-hero-assets.mjs` runs before `vite build`.
 
 1. **No Babylon barrel imports.** Deep-import (`@babylonjs/core/Events/pointerEvents`),
    never `@babylonjs/core`. The package index side-effect-imports all of
@@ -29,7 +30,9 @@ Rules 1–2 are enforced: `npm run build` ends with
    Test with `?quality=low|medium|high`.
 5. **Ship assets mobile-ready.** KTX2 textures (`npm run assets:ktx2`), meshopt
    GLBs (`npm run assets:meshopt`), Opus-in-WebM audio, and sizes per
-   `TEXTURE_RULES` in `src/core/budget.ts`.
+   `TEXTURE_RULES` in `src/core/budget.ts`. New heroes come from the default
+   pipeline in `tools/motion-video/README.md` (25-bone Mixamo rig) and ship
+   with `npm run ship:hero -- <id> --install`.
 6. **Compress at build time.** `vite build` writes `.br`/`.gz` siblings
    (`tools/precompress.mjs`). `server/index.mjs` only picks one. Don't add
    per-request CPU work to the static server.

@@ -135,7 +135,7 @@ const report = async (scene) => {
 };
 
 await report("village");
-for (const id of ["arena", "practice", "village"]) {
+for (const id of ["arena", "practice", "kowloon", "village"]) {
   await page.evaluate((id) => void window.psyrena.go(id), id);
   await sleep(500);
   await report(id);

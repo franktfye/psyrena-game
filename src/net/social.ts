@@ -215,6 +215,14 @@ export class SocialClient {
       this.onPartyLaunch?.(JSON.parse((e as MessageEvent).data) as PartyLaunchInfo);
     });
 
+    // Dream Siege parties (server/survival.mjs). Forwarded as window events so
+    // the survival chunk (lazy) listens without this file importing it.
+    for (const type of ["survivalLaunch", "survivalState", "survivalEnd"]) {
+      this.es.addEventListener(type, (e) => {
+        window.dispatchEvent(new CustomEvent("psy:survival", { detail: { type, data: JSON.parse((e as MessageEvent).data) } }));
+      });
+    }
+
     this.es.addEventListener("lobbyReady", (e) => {
       this.onLobbyReady?.(JSON.parse((e as MessageEvent).data) as LobbyReadyInfo);
     });

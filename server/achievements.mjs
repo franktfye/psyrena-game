@@ -56,6 +56,18 @@ const ACHIEVEMENTS = [
   { id: "gear_t4",         category: "gear",       name: "Transcendent",        desc: "Upgrade any gear slot to tier 4.",  stat: "gearMaxTier",    cmp: "gte", target: 4,     title: "Transcendent" },
   { id: "gear_all_t2",     category: "gear",       name: "Polished Mind",       desc: "All 6 gear slots at tier 2+.",      stat: "gearAllMinTier", cmp: "gte", target: 2,     title: null },
   { id: "gear_all_t4",     category: "gear",       name: "The Ideal Self",      desc: "All 6 gear slots at tier 4.",       stat: "gearAllMinTier", cmp: "gte", target: 4,     title: "The Ideal Self" },
+  // survival (Dream Siege)
+  { id: "sv_lucid",        category: "survival",   name: "Lucid Dreamer",       desc: "Clear Lucid Dream (20 waves).",     stat: "svLucidClears",  cmp: "gte", target: 1,     title: null },
+  { id: "sv_deep",         category: "survival",   name: "Deep Sleeper",        desc: "Clear Deep Sleep (40 waves).",      stat: "svDeepClears",   cmp: "gte", target: 1,     title: null },
+  { id: "sv_terror",       category: "survival",   name: "Dream Walker",        desc: "Clear Night Terror (60 waves).",    stat: "svTerrorClears", cmp: "gte", target: 1,     title: "Dream Walker" },
+  { id: "sv_wave_30",      category: "survival",   name: "The Long Night",      desc: "Survive 30 waves in one run.",      stat: "svBestWave",     cmp: "gte", target: 30,    title: null },
+  { id: "sv_flawless",     category: "survival",   name: "Untouched Sleeper",   desc: "Clear a Dream Siege without going down.", stat: "svFlawless", cmp: "gte", target: 1, title: null },
+  { id: "sv_kills_1k",     category: "survival",   name: "Fog Clearer",         desc: "Defeat 1,000 dream-spawn.",         stat: "svKills",        cmp: "gte", target: 1000,  title: null },
+  { id: "sv_kills_10k",    category: "survival",   name: "Sandman's Bane",      desc: "Defeat 10,000 dream-spawn.",        stat: "svKills",        cmp: "gte", target: 10000, title: "Sandman's Bane" },
+  { id: "sv_damage_100k",  category: "survival",   name: "Nightmare Shredder",  desc: "Deal 100,000 damage in one Dream Siege.", stat: "svBestDamage", cmp: "gte", target: 100000, title: null },
+  { id: "sv_recall_25",    category: "survival",   name: "Total Recall",        desc: "Answer 25 Recall Tests right.",     stat: "svRecall",       cmp: "gte", target: 25,    title: "Total Recall" },
+  { id: "sv_revive_10",    category: "survival",   name: "Reach Out",           desc: "Revive allies 10 times.",           stat: "svRevives",      cmp: "gte", target: 10,    title: null },
+  { id: "sv_jackpot",      category: "survival",   name: "Sweet Dreams",        desc: "Win a Dream Siege jackpot.",        stat: "svJackpots",     cmp: "gte", target: 1,     title: null },
 ];
 
 let db = null;
@@ -151,7 +163,16 @@ function computeStats(userId) {
     ).get(userId, userId).n
   );
 
+  // Dream Siege (economy.mjs settleSurvival).
+  const sv = db.prepare("SELECT * FROM survival_stats WHERE user_id = ?").get(String(userId));
+  const svRec = db.prepare("SELECT difficulty, best_wave, clears FROM survival_records WHERE user_id = ?").all(String(userId));
+  const svClears = (d) => Number(svRec.find((r) => r.difficulty === d)?.clears ?? 0);
+
   return {
+    svLucidClears: svClears("lucid"), svDeepClears: svClears("deep"), svTerrorClears: svClears("terror"),
+    svBestWave: Math.max(0, ...svRec.map((r) => Number(r.best_wave))),
+    svKills: Number(sv?.kills ?? 0), svBestDamage: Number(sv?.best_damage ?? 0), svRecall: Number(sv?.recall_right ?? 0),
+    svRevives: Number(sv?.revives ?? 0), svJackpots: Number(sv?.jackpots ?? 0), svFlawless: Number(sv?.flawless ?? 0),
     heroesUnlocked, gearSlotsOwned, lootOpened, seasonRank, seasonRating,
     bestScore, level, bossesDefeated, nightmareWins, fastestMs,
     nightmareFastestMs, bestDps, friends, gearMaxTier, gearAllMinTier,
@@ -333,7 +354,38 @@ function handleLeaderboards(res, userId) {
     xp: myXp,
   };
 
+  // -- Dream Siege: hardest difficulty reached, then its best wave, then damage ---
+  // One row per player: their deepest record (Night Terror wave 12 outranks
+  // Lucid wave 20 — it is the harder night).
+  const svRows = db
+    .prepare(
+      `SELECT r.user_id, u.username, r.difficulty, r.best_wave, r.clears,
+              CASE r.difficulty WHEN 'terror' THEN 3 WHEN 'deep' THEN 2 ELSE 1 END AS d,
+              COALESCE(st.best_damage, 0) AS best_damage, COALESCE(st.kills, 0) AS kills
+       FROM survival_records r
+       JOIN users u ON u.id = CAST(r.user_id AS INTEGER)
+       LEFT JOIN survival_stats st ON st.user_id = r.user_id
+       WHERE r.best_wave > 0`
+    )
+    .all();
+  const svBest = new Map();
+  for (const r of svRows) {
+    const cur = svBest.get(r.user_id);
+    if (!cur || r.d > cur.d || (r.d === cur.d && Number(r.best_wave) > Number(cur.best_wave))) svBest.set(r.user_id, r);
+  }
+  const svSorted = [...svBest.values()].sort((a, b) =>
+    b.d - a.d || Number(b.best_wave) - Number(a.best_wave) || Number(b.best_damage) - Number(a.best_damage) || String(a.user_id).localeCompare(String(b.user_id)));
+  const svEntry = (r, i) => ({
+    rank: i + 1, username: r.username, difficulty: r.difficulty, wave: Number(r.best_wave),
+    cleared: Number(r.clears) > 0 && Number(r.best_wave) >= ({ lucid: 20, deep: 40, terror: 60 }[r.difficulty] ?? 99),
+    bestDamage: Number(r.best_damage), kills: Number(r.kills),
+  });
+  const svTop = svSorted.slice(0, 100).map(svEntry);
+  const svMineAt = svSorted.findIndex((r) => r.user_id === String(userId));
+  const svOwn = svMineAt >= 0 ? svEntry(svSorted[svMineAt], svMineAt) : { rank: null, difficulty: null, wave: 0, cleared: false, bestDamage: 0, kills: 0 };
+
   return send(res, 200, {
+    survival: { top: svTop, own: svOwn },
     global: { top: globalTop, own: globalOwn },
     clears: { top: clearsTop, own: clearsOwn },
     levels: { top: levelsTop, own: levelsOwn },

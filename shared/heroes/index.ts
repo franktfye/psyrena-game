@@ -2,6 +2,8 @@ import type { Hero } from "../types";
 import { FREUD } from "./freud.ts";
 import { PAVLOV } from "./pavlov.ts";
 import { SKINNER } from "./skinner.ts";
+import { ERIKSON } from "./erikson.ts";
+import { AINSWORTH } from "./ainsworth.ts";
 
 /**
  * The playable roster — every hero whose kit is authored data, keyed by id.
@@ -17,6 +19,8 @@ export const HEROES: Record<string, Hero> = {
   freud: FREUD,
   pavlov: PAVLOV,
   skinner: SKINNER,
+  erikson: ERIKSON,
+  ainsworth: AINSWORTH,
 };
 
 /**

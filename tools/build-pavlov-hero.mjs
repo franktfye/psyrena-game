@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 /**
+ * LEGACY: kept to rebuild the heroes it already shipped. New heroes use the
+ * default pipeline, tools/motion-video/README.md (25-bone Mixamo rig) then
+ * tools/ship-hero.mjs.
+ *
  * Build the Pavlov hero clip set from a Tripo rig-and-animate export into the
  * engine's clip vocabulary (idle/walk/run/cast/cast_e/cast_r/cast_f/hit/death/
  * jump_start — the keys arenaHero.ts and createHeroAnimator resolve).

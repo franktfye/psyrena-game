@@ -19,8 +19,16 @@ import {
   initSocial, handleSocial, pushTo, notifyFriendsOf, markOffline, collectOfflineExpired,
   droppedOut,
 } from "./social.mjs";
-import { initEconomy, handleEconomy, touchArenaHold, STARTING_IMAGINZ } from "./economy.mjs";
+import {
+  initEconomy,
+  handleEconomy,
+  touchArenaHold,
+  STARTING_IMAGINZ,
+  earnedHeroUnlocks,
+  HERO_UNLOCK_WINS,
+} from "./economy.mjs";
 import { initVillage, handleVillage, leaveVillage } from "./village.mjs";
+import { initSurvival, handleSurvival } from "./survival.mjs";
 import {
   initFight, handleFightSim, deserterLockFor, markFightAbandon, restartDeserterClock,
 } from "./fight.mjs";
@@ -28,7 +36,7 @@ import { initAchievements, handleAchievements } from "./achievements.mjs";
 import { initCoffee, handleCoffee } from "./coffee.mjs";
 import { initEvents, logEvent } from "./events.mjs";
 import {
-  initAdmin, handleAdmin, serveConsole, ensureAdminBootstrap,
+  initAdmin, handleAdmin, serveConsole, ensureAdminBootstrap, isAdmin,
   inviteRequired, reserveInvite, releaseInvite, recordInviteUse, banInfo,
 } from "./admin.mjs";
 
@@ -200,10 +208,12 @@ db.exec(`
 
 // One-shot sweep: rows created before a hero joined DEFAULT_UNLOCKS still
 // hold the old list (the dev account and fixtures predate Pavlov), and
-// /api/select-hero 403s on anything not in the row. Purely additive — a
+// /api/select-hero 403s on anything not in the row. Same for a hero earned by
+// boss clears (economy.mjs HERO_UNLOCK_WINS): an account that already has the
+// wins gets the hero now rather than on its next clear. Purely additive — a
 // player's earned unlocks are never removed.
 {
-  const rows = db.prepare("SELECT user_id, unlocked_heroes FROM game_state").all();
+  const rows = db.prepare("SELECT user_id, unlocked_heroes, bosses_defeated FROM game_state").all();
   const patch = db.prepare("UPDATE game_state SET unlocked_heroes = ? WHERE user_id = ?");
   for (const row of rows) {
     let unlocked;
@@ -213,7 +223,13 @@ db.exec(`
       unlocked = [];
     }
     if (!Array.isArray(unlocked)) unlocked = [];
-    const merged = [...new Set([...unlocked, ...DEFAULT_UNLOCKS])];
+    const merged = [
+      ...new Set([
+        ...unlocked,
+        ...DEFAULT_UNLOCKS,
+        ...earnedHeroUnlocks(Number(row.bosses_defeated ?? 0)),
+      ]),
+    ];
     if (merged.length !== unlocked.length) patch.run(JSON.stringify(merged), row.user_id);
   }
 }
@@ -414,6 +430,18 @@ if (process.env.PSYRENA_DEV_SEED === "1") {
   seedDevFixtures().catch((err) => console.error("[api] dev seed failed:", err));
 }
 
+/**
+ * The heroes this account may pick: what it has earned, plus, for an admin,
+ * every hero gated on boss wins (economy.mjs HERO_UNLOCK_WINS). Frank,
+ * 2026-10-18: the admin account always plays every shipped hero. Computed on
+ * read and never written, so it follows the admin flag and stays out of the
+ * collection achievements (achievements.mjs counts the stored list).
+ */
+function unlockedHeroesFor(userId, stored) {
+  const earned = JSON.parse(stored);
+  return isAdmin(userId) ? [...new Set([...earned, ...Object.keys(HERO_UNLOCK_WINS)])] : earned;
+}
+
 function profileFor(userId) {
   const user = db.prepare("SELECT id, username, created_at FROM users WHERE id = ?").get(userId);
   const s = db.prepare("SELECT * FROM game_state WHERE user_id = ?").get(userId);
@@ -431,7 +459,7 @@ function profileFor(userId) {
       playtimeMin: s.playtime_min,
     },
     selectedHero: s.selected_hero,
-    unlockedHeroes: JSON.parse(s.unlocked_heroes),
+    unlockedHeroes: unlockedHeroesFor(userId, s.unlocked_heroes),
     // Battle record per hero actually played (economy.mjs hero_records, one
     // upsert per fight report). Most-played first; heroes never fought as
     // simply have no row, so the client can render "no battles yet".
@@ -1195,6 +1223,8 @@ initVillage(db, apiHelpers);
 // The boss fight itself: server-authoritative sessions running the same
 // shared/fight sim the client used to own outright.
 initFight(db, apiHelpers);
+// Dream Siege parties: server-run SurvivalSim sessions (solo runs stay local).
+initSurvival(db, apiHelpers);
 initAchievements(db, apiHelpers);
 initCoffee(db, apiHelpers);
 // Last: the admin layer's bootstrap promotion needs the tables above, and its
@@ -1446,9 +1476,15 @@ export async function handleApi(req, res) {
       return send(res, 200, { solo: false, roomId, ready: readyCount, total: members.length }), true;
     }
 
+    // Party Dream Siege (server/survival.mjs); the solo settle stays with the economy.
+    if (url.pathname.startsWith("/api/survival/") && route !== "POST /api/survival/settle") {
+      return await handleSurvival(req, res, url, userId), true;
+    }
+
     if (url.pathname.startsWith("/api/gear/") || url.pathname.startsWith("/api/loot/") ||
         url.pathname.startsWith("/api/pet/") ||
         url.pathname.startsWith("/api/fight/") || url.pathname.startsWith("/api/arena/") ||
+        route === "POST /api/survival/settle" ||
         route === "GET /api/rankings" || route === "GET /api/economy") {
       return await handleEconomy(req, res, url, userId), true;
     }
@@ -1471,7 +1507,8 @@ export async function handleApi(req, res) {
       if (!userId) return send(res, 401, { error: "Not logged in." }), true;
       const { hero } = await readBody(req);
       if (!HERO_IDS.includes(hero)) return send(res, 400, { error: "Unknown hero." }), true;
-      const unlocked = JSON.parse(
+      const unlocked = unlockedHeroesFor(
+        userId,
         db.prepare("SELECT unlocked_heroes FROM game_state WHERE user_id = ?").get(userId).unlocked_heroes
       );
       if (!unlocked.includes(hero)) return send(res, 403, { error: "Hero is locked." }), true;

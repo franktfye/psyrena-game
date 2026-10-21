@@ -34,6 +34,7 @@ import { heroById } from "@shared/heroes";
 import { TRAINING_DUMMY } from "@shared/bosses/trainingDummy";
 import { BEAT_PERIOD_S } from "@shared/combat";
 import { BossFight } from "@shared/fight/bossFight";
+import { SKILL_ICON_HEROES } from "../fight/arenaHero";
 import { player } from "../state/player";
 import { createDamageNumbers } from "../vfx/damageNumbers";
 import { createPracticeMeter } from "../ui/practiceMeter";
@@ -200,7 +201,7 @@ export async function createPracticeBooth(
   // swings and never dies. One implementation, so the pit cannot drift from
   // the fight, and every rider fires here exactly as it will in the arena.
   const BUFF_ICONS = "/assets/ui/buffs";
-  const SKILL_ICONS = `/assets/ui/skills/${HERO.id}`;
+  const SKILL_ICONS = SKILL_ICON_HEROES.has(HERO.id) ? `/assets/ui/skills/${HERO.id}` : null;
   const slug = (id: string): string => (id.split(".").pop() ?? id).replace(/-/g, "_");
   // Palette slugs included for Skinner's FI/VI HoT buffs — same routing rule
   // as the arena (arenaCombat.ts): a buff keyed on the skill that armed it
@@ -210,7 +211,8 @@ export async function createPracticeBooth(
   );
   const buffIconUrl = (key?: string): string | undefined => {
     if (!key) return undefined;
-    return SKILL_BUFF_KEYS.has(key) ? `${SKILL_ICONS}/${key}.webp` : `${BUFF_ICONS}/${key}.webp`;
+    if (SKILL_BUFF_KEYS.has(key)) return SKILL_ICONS ? `${SKILL_ICONS}/${key}.webp` : undefined;
+    return `${BUFF_ICONS}/${key}.webp`;
   };
 
   let barHandle: SkillBarHandle | null = null;
@@ -272,7 +274,10 @@ export async function createPracticeBooth(
     // pairing's Focus reward has to be visible here too — same hook, same
     // pool the arena fills (`restoreMana`), or the pit would teach a bell that
     // pays nothing.
-    gainFocus: (n) => player.restoreMana(n),
+    // Deferred a microtask: the sim refunds DURING the bar's cast handler,
+    // which charges the press only after — refund first and the 100 cap
+    // could eat it (Erikson's pair refund at a near-full pool).
+    gainFocus: (n) => queueMicrotask(() => player.restoreMana(n)),
     dotTick: (label, amount) => {
       dmgNumbers?.spawnDot(hitPoint, amount, label);
       meter.record(label, amount, "damage");
@@ -293,6 +298,11 @@ export async function createPracticeBooth(
     // must wear the live cell.
     operantChanged: (state) => {
       barHandle?.setOperant(state);
+    },
+    // Erikson's keys 1/2/LMB name the stage they cast — the pit is where the
+    // chart gets learned, so the faces follow the sim exactly.
+    psychosocialChanged: (state) => {
+      barHandle?.setPsychosocial(state);
     },
   });
   tickers.push({ tick: () => fight.tick(scene.getEngine().getDeltaTime() / 1000) });
@@ -317,6 +327,8 @@ export async function createPracticeBooth(
     // …and the same sim owns Skinner's operant quadrant: faces repaint from
     // `operantChanged` → `setOperant`, never from the bar's own hub-side flip.
     simDrivesOperant: true,
+    // …and Erikson's rotation, through `psychosocialChanged` → `setPsychosocial`.
+    simDrivesPsychosocial: true,
     onCast: (slot, land) => {
       const label = slot.label.replace(/\n/g, " ");
       // Resolved at CAST time so it captures the beat that was up when the

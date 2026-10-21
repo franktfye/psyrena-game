@@ -1,7 +1,7 @@
 /**
- * Client for the achievements / titles / leaderboards API: the 33-achievement
+ * Client for the achievements / titles / leaderboards API: the achievement
  * list with per-account progress, the owned/equipped title state, and the
- * three Hall boards (global rating, fastest boss clears, account levels).
+ * Hall boards (global rating, fastest boss clears, account levels, Dream Siege).
  *
  * Same fetch idiom as economy.ts — same-origin, cookie auth, `ApiError`
  * carrying the HTTP status. `cmp` semantics stay server-side; the client only
@@ -17,7 +17,8 @@ export type AchievementCategory =
   | "levels"
   | "boss"
   | "friends"
-  | "gear";
+  | "gear"
+  | "survival";
 
 export interface AchievementDef {
   id: string;
@@ -72,7 +73,22 @@ export interface LevelBoardRow {
   xp: number;
 }
 
+/** Dream Siege: each player's deepest night (hardest difficulty, then best wave). */
+export interface SurvivalBoardRow {
+  rank: number;
+  username: string;
+  difficulty: "lucid" | "deep" | "terror";
+  wave: number;
+  cleared: boolean;
+  bestDamage: number;
+  kills: number;
+}
+
 export interface LeaderboardsResponse {
+  survival: {
+    top: SurvivalBoardRow[];
+    own: Omit<SurvivalBoardRow, "rank" | "username" | "difficulty"> & { rank: number | null; difficulty: SurvivalBoardRow["difficulty"] | null };
+  };
   global: {
     top: GlobalBoardRow[];
     own: { rank: number | null; rating: number; level: number };

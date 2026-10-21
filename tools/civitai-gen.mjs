@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Generate concept-art PNGs via Civitai Orchestration (OpenAI gpt-image-2 engine).
+// Generate concept-art PNGs via Civitai Orchestration (OpenAI gpt-image engine).
 // Token: ~/.civitai.api.env (raw token, or KEY=value line containing "token"/"key").
 //
 // Usage:
@@ -9,6 +9,7 @@
 //
 // Options: --width --height (256–3840, multiples of 16, default 1024)
 //          --quality low|medium|high (default high)  --quantity 1–4 (default 1)
+//          --model gpt-image-2.5-sunburst|gpt-image-2.5-flare|gpt-image-2 (default gpt-image-2.5-sunburst)
 //          --image <path>  (repeatable; switches to editImage, edit-chaining)
 //          --whatif        (print Buzz cost, generate nothing)
 
@@ -19,7 +20,7 @@ import { join, dirname, extname, basename } from 'node:path';
 const API = 'https://orchestration.civitai.com/v2/consumer/workflows';
 
 function parseArgs(argv) {
-  const a = { width: 1024, height: 1024, quality: 'high', quantity: 1, images: [] };
+  const a = { width: 1024, height: 1024, quality: 'high', quantity: 1, images: [], model: 'gpt-image-2.5-sunburst' };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const next = () => argv[++i];
@@ -31,6 +32,7 @@ function parseArgs(argv) {
     else if (k === '--quality') a.quality = next();
     else if (k === '--quantity') a.quantity = Number(next());
     else if (k === '--image') a.images.push(next());
+    else if (k === '--model') a.model = next();
     else if (k === '--whatif') a.whatif = true;
     else throw new Error(`Unknown arg: ${k}`);
   }
@@ -80,7 +82,7 @@ if (args.width % 16 || args.height % 16) { console.error('width/height must be m
 const token = await loadToken();
 const input = {
   engine: 'openai',
-  model: 'gpt-image-2',
+  model: args.model,
   operation: args.images.length ? 'editImage' : 'createImage',
   prompt: args.prompt,
   width: args.width,

@@ -19,6 +19,8 @@
 import { FREUD } from "@shared/heroes/freud";
 import { PAVLOV, PAVLOV_CONDITIONING } from "@shared/heroes/pavlov";
 import { SKINNER, SKINNER_REINFORCEMENT } from "@shared/heroes/skinner";
+import { ERIKSON, ERIKSON_PSYCHOSOCIAL } from "@shared/heroes/erikson";
+import { AINSWORTH } from "@shared/heroes/ainsworth";
 import { COMBAT, BEAT_PERIOD_S } from "@shared/combat";
 
 // Palette cost and cooldown are hardcoded on the bar scaffold, not on the kit:
@@ -399,6 +401,213 @@ export const SKINNER_SKILL_LORE: SkillLore[] = [
   },
 ];
 
+/**
+ * Erikson's six buttons. Keys 1 and 2 relabel themselves on every press (the
+ * stage and virtue they cast next), so their copy describes the rotation, and
+ * the full chart lives in the character page below.
+ */
+const ERIKSON_CHART = ERIKSON_PSYCHOSOCIAL.stages
+  .map((st, i) => `${i + 1}. ${st.crisis} (${st.age}): ${st.virtue}`)
+  .join(" · ");
+
+export const ERIKSON_SKILL_LORE: SkillLore[] = [
+  {
+    id: "erikson.relations",
+    name: "Significant Relations",
+    key: "LMB",
+    summary:
+      "Your add-on attack. You get one after every Life Stage and one after every Virtue. It is named for the people who matter most at the current stage.",
+    numbers: () =>
+      `Deals ${ERIKSON.basic.base} damage. Available once after each key 1 and once after each key 2, never more. No Focus cost. It never eats your global cooldown.`,
+    howToUse:
+      "Press 1, then this. Press 2, then this. The rhythm is 1, attack, 2, attack. An add-on you skip is gone, so do not save it.",
+    theory: `Erikson charted a widening radius of significant relations across the life cycle: ${ERIKSON_PSYCHOSOCIAL.stages.map((st) => st.relations).join(", ")}. Each stage is lived among more people than the last.`,
+  },
+  {
+    id: "erikson.stage",
+    name: "Life Stage",
+    key: "1",
+    summary:
+      "Casts the stage you are in. The button shows its name, and the line above the bar shows the whole crisis and its age.",
+    numbers: () =>
+      `Deals ${ERIKSON.palette[0]!.base} damage and arms the stage's virtue for key 2. Costs ${ERIKSON.palette[0]!.focusCost} Focus.`,
+    howToUse:
+      "Always press 1 before 2. Pressing 1 twice casts the same stage again and does not move you on.",
+    theory: `Erikson described eight psychosocial stages, each a crisis between two poles that a person meets at a typical age: ${ERIKSON_CHART}.`,
+  },
+  {
+    id: "erikson.virtue",
+    name: "Virtue",
+    key: "2",
+    summary:
+      "Answers the stage with its virtue. Stage and virtue together complete the pair: your biggest hit, one virtue banked, and the next stage comes up.",
+    numbers: () =>
+      `After key 1: deals ${ERIKSON.palette[1]!.base} damage, banks 1 virtue (up to ${ERIKSON_PSYCHOSOCIAL.maxVirtues}) and returns ${ERIKSON_PSYCHOSOCIAL.pairFocusRefund} Focus. Without a stage armed: deals ${Math.round(ERIKSON.palette[1]!.base * ERIKSON_PSYCHOSOCIAL.unmatchedVirtueMult)}, banks nothing and returns nothing. Costs ${ERIKSON.palette[1]!.focusCost} Focus.`,
+    howToUse:
+      "Read the virtue on the button as you press it. A complete pair pays part of its own Focus back, so the right order keeps you casting. After stage 8 the cycle starts again at stage 1, so every press teaches the next row of the chart.",
+    theory:
+      "Each stage, met well, leaves a basic virtue behind: Hope, Will, Purpose, Competence, Fidelity, Love, Care and Wisdom. Erikson's point was a favourable balance between the two poles, not a perfect score, and that the stages build on one another in order.",
+  },
+  {
+    id: "erikson.moratorium",
+    name: "Psychosocial Moratorium",
+    key: "E",
+    summary: "Your one defensive button. Step back, recover, and come back to the crisis.",
+    numbers: () =>
+      `Restores ${ERIKSON.defense.heal} health to you and reduces your damage taken by ${pct(ERIKSON.defense.mitigation?.magnitude ?? 0)} for ${(ERIKSON.defense.mitigation?.durationMs ?? 0) / 1000} sec. Costs ${ERIKSON.defense.focusCost} Focus. ${ERIKSON.defense.cooldownMs / 1000} sec cooldown.`,
+    howToUse: "Press it when the boss turns on you. Your stage and banked virtues wait for you.",
+    theory:
+      "Erikson's moratorium is the delay a society grants young people before adult commitments: time to try out roles without being held to them. Here it is a pause in the fight.",
+  },
+  {
+    id: "erikson.identity-crisis",
+    name: "Identity Crisis",
+    key: "R",
+    summary: "Shakes every enemy at once.",
+    numbers: () =>
+      `Deals ${ERIKSON.chain.base} damage to every enemy. Costs ${ERIKSON.chain.focusCost} Focus. ${ERIKSON.chain.cooldownMs / 1000} sec cooldown.`,
+    howToUse: "Press it on cooldown. Against a crowd it hits every one of them.",
+    theory:
+      "Erikson coined the term identity crisis for the adolescent struggle between a coherent sense of self and role confusion. James Marcia later measured it as four identity statuses, the most tested part of the stage model.",
+  },
+  {
+    id: "erikson.life-review",
+    name: "Life Review",
+    key: "F",
+    summary: "Looks back on every virtue you have banked and turns them into one blow.",
+    numbers: () =>
+      `Deals ${ERIKSON.ultimate.base} damage plus ${ERIKSON.ultimate.perMark} for every banked virtue, up to ${ERIKSON.ultimate.maxMarksConsumed}, then spends them. Your stage does not reset. Costs ${ERIKSON.ultimate.focusCost} Focus. ${ERIKSON.ultimate.cooldownMs / 1000} sec cooldown.`,
+    howToUse: "Bank virtues with 1 and 2, then press F when it comes off cooldown.",
+    theory:
+      "Erikson's last stage, Integrity vs Despair, is a look back over one's one and only life. Robert Butler named the process life review in 1963, and reminiscence work with older adults grew from it.",
+  },
+];
+
+const AIN = AINSWORTH;
+const ainStyle = (id: string) => AIN.palette.find((p) => p.id === id)!;
+const ainFx = (id: string, kind: string) => ainStyle(id).effects.find((e) => e.kind === kind);
+const ainSec = (ms?: number): number => (ms ?? 0) / 1000;
+
+/**
+ * Ainsworth's buttons. Keys 1–4 are the four attachment styles, each acting
+ * out its Strange Situation reunion; the stance sits on 5 because her
+ * palette fills 1–4 (arenaHero.ts stanceKey).
+ */
+export const AINSWORTH_SKILL_LORE: SkillLore[] = [
+  {
+    id: "ainsworth.sensitivity",
+    name: "Sensitivity",
+    key: "LMB",
+    summary: "Your basic attack, and an answer to a teammate's signal.",
+    numbers: () => {
+      const e = AIN.basic.effects[0]!;
+      return `Deals ${AIN.basic.base} damage. If a teammate was hit in the last ${ainSec(e.durationMs)} sec, it also heals them ${e.magnitude}. No Focus cost. ${ainSec(AIN.basic.cooldownMs)} sec cooldown.`;
+    },
+    howToUse: "Attack right after a teammate takes a hit. Promptness is the whole skill.",
+    theory:
+      "Ainsworth rated mothers on sensitivity: noticing a baby's signals, reading them correctly, and answering promptly and appropriately. Sensitive care was the strongest early predictor of a secure baby in her Baltimore study.",
+  },
+  {
+    id: "ainsworth.secure",
+    name: "Secure",
+    key: "1",
+    summary: "Comfort, then let go: the team recovers and goes out exploring.",
+    numbers: () =>
+      `Deals ${ainStyle("ainsworth.secure").base} damage and places a Bond Mark. Lifts Fixation off every teammate, and the whole team deals ${pct(ainFx("ainsworth.secure", "team.amp")?.magnitude ?? 0)} more damage for ${ainSec(ainFx("ainsworth.secure", "team.amp")?.durationMs)} sec.`,
+    howToUse: "Your steady key. Press it after someone misreads the boss, or to open a damage window.",
+    theory:
+      "In the Strange Situation a secure baby is upset when the mother leaves, goes to her when she returns, is soothed quickly and goes back to playing. The caregiver is a secure base to explore from.",
+  },
+  {
+    id: "ainsworth.avoidant",
+    name: "Avoidant",
+    key: "2",
+    summary: "Looks calm, isn't: your hardest hit, and the pain arrives later.",
+    numbers: () => {
+      const st = ainFx("ainsworth.avoidant", "self.stagger");
+      return `Deals ${ainStyle("ainsworth.avoidant").base} damage and places a Bond Mark. You shed ${pct(ainFx("ainsworth.avoidant", "threat.drop")?.magnitude ?? 0)} of your threat and take ${pct(ainFx("ainsworth.avoidant", "mitigation.grant")?.magnitude ?? 0)} less damage for ${ainSec(st?.durationMs)} sec, and every hit in that time bleeds out over ${st?.magnitude} sec instead of landing at once.`;
+    },
+    howToUse: "Press it before a big hit lands on you, then heal through the bleed.",
+    theory:
+      "An avoidant baby barely reacts when the mother leaves and ignores her when she returns. It looks like calm, but Sroufe and Waters (1977) found these babies' heart rates rose on reunion: the distress was there, just not shown.",
+  },
+  {
+    id: "ainsworth.ambivalent",
+    name: "Ambivalent",
+    key: "3",
+    summary: "The taunt: cling to the boss's attention, and refuse to be soothed.",
+    numbers: () => {
+      const t = ainFx("ainsworth.ambivalent", "taunt");
+      return `Deals ${ainStyle("ainsworth.ambivalent").base} damage and places a Bond Mark. The boss locks onto you for ${ainSec(t?.durationMs)} sec, the team takes ${pct(ainFx("ainsworth.ambivalent", "mitigation.grant")?.magnitude ?? 0)} less damage, and healing on you is cut ${pct(ainFx("ainsworth.ambivalent", "heal.cut.self")?.magnitude ?? 0)} while it lasts.`;
+    },
+    howToUse: "Press it when the boss is on a teammate. Tell your healer before you do.",
+    theory:
+      "An ambivalent, or resistant, baby is very upset at the separation and seeks the mother on her return, then pushes her away and stays hard to soothe. Wanting contact and resisting it at once is the pattern.",
+  },
+  {
+    id: "ainsworth.disorganized",
+    name: "Disorganized",
+    key: "4",
+    summary: "Approach, freeze, shield: everyone else is untouchable for a moment.",
+    numbers: () => {
+      const d = ainStyle("ainsworth.disorganized");
+      const im = d.effects.find((e) => e.kind === "team.immunity");
+      return `Deals ${d.base} damage and places a Bond Mark. Every other teammate is immune to the boss for ${ainSec(im?.durationMs)} sec. You are not. Needs ${d.requiresVariety?.distinct} different styles cast in the last ${ainSec(d.requiresVariety?.withinMs)} sec. ${ainSec(d.cooldownMs)} sec cooldown.`;
+    },
+    howToUse: "Mix two other styles first, then save it for the moment before the team would be hit hard.",
+    theory:
+      "Mary Main and Judith Solomon (1990) added this fourth pattern for babies who fit none of Ainsworth's three: they freeze, or approach and turn away at the same time. In long-term studies it is the strongest early predictor of dissociation later on.",
+  },
+  {
+    id: "ainsworth.proximity-maintenance",
+    name: "Proximity Maintenance",
+    key: "5",
+    summary: "Your tank stance: stay close, and the boss stays on you.",
+    numbers: () =>
+      `Toggle. While held you bank ${AIN.threatStance?.multiplier}x threat per point of damage. Free, no cooldown.`,
+    howToUse: "Hold it while you tank. Drop it, or use Avoidant or Strange Situation, to hand the boss over.",
+    theory:
+      "Bowlby described attachment behaviour as keeping close to the attachment figure: proximity maintenance. Ainsworth's observations showed how a baby keeps that closeness, by watching, following and calling.",
+  },
+  {
+    id: "ainsworth.safe-haven",
+    name: "Safe Haven",
+    key: "E",
+    summary: "Gather the team in: heal, shelter and clear their heads.",
+    numbers: () =>
+      `Heals ${AIN.defense.heal}, split across the team, and the team takes ${pct(AIN.defense.mitigation?.magnitude ?? 0)} less damage for ${ainSec(AIN.defense.mitigation?.durationMs)} sec. Lifts Fixation off everyone. Costs ${AIN.defense.focusCost} Focus. ${ainSec(AIN.defense.cooldownMs)} sec cooldown.`,
+    howToUse: "Press it before the boss's team-wide attack lands.",
+    theory:
+      "A safe haven is where a frightened child runs for comfort; a secure base is where it explores from. Ainsworth used both ideas to describe what a sensitive caregiver gives.",
+  },
+  {
+    id: "ainsworth.strange-situation",
+    name: "Strange Situation",
+    key: "R",
+    summary: "Step away, come back, and see how the boss reacts.",
+    numbers: () => {
+      const v = AIN.chain.effects.find((e) => e.kind === "vulnerability");
+      return `Deals ${AIN.chain.base} damage. You shed ${pct(AIN.chain.effects.find((e) => e.kind === "threat.drop")?.magnitude ?? 0)} of your threat, and the boss takes ${pct(v?.magnitude ?? 0)} more damage from everyone for ${ainSec(v?.durationMs)} sec. Costs ${AIN.chain.focusCost} Focus. ${ainSec(AIN.chain.cooldownMs)} sec cooldown.`;
+    },
+    howToUse: "Press it on cooldown. It also passes the boss to a teammate when you need a breather.",
+    theory:
+      "Ainsworth's laboratory procedure: about twenty minutes, eight short episodes in which a mother leaves and returns and a stranger comes in. How a one-year-old greets the mother on her return classifies its attachment.",
+  },
+  {
+    id: "ainsworth.earned-security",
+    name: "Earned Security",
+    key: "F",
+    summary: "Cash in the team's Marks, heal everyone, and make the team secure.",
+    numbers: () => {
+      const amp = AIN.ultimate.effects.find((e) => e.kind === "team.amp");
+      return `Deals ${AIN.ultimate.base} damage plus ${AIN.ultimate.perMark} for every Mark consumed, up to ${AIN.ultimate.maxMarksConsumed}. Heals the team ${AIN.ultimate.heal}, lifts Fixation, and the team deals ${pct(amp?.magnitude ?? 0)} more damage for ${ainSec(amp?.durationMs)} sec. Costs ${AIN.ultimate.focusCost} Focus. ${ainSec(AIN.ultimate.cooldownMs)} sec cooldown.`;
+    },
+    howToUse: "Build Marks with 1 to 4, then press F for a big hit and a team-wide recovery.",
+    theory:
+      "Earned security is Mary Main and Erik Hesse's term from the Adult Attachment Interview: adults who describe a hard childhood but tell it coherently, and are secure now. Attachment is not destiny.",
+  },
+];
+
 /** Look up the lore for a bar slot id, whoever's kit it belongs to. Each
  *  palette stage gets its own entry; anything else with the stage prefix
  *  falls back to the shared one. */
@@ -414,6 +623,8 @@ export function loreFor(slotId: string): SkillLore | null {
     SKILL_LORE.find((s) => s.id === id) ??
     PAVLOV_SKILL_LORE.find((s) => s.id === id) ??
     SKINNER_SKILL_LORE.find((s) => s.id === id) ??
+    ERIKSON_SKILL_LORE.find((s) => s.id === id) ??
+    AINSWORTH_SKILL_LORE.find((s) => s.id === id) ??
     SKILL_LORE.find((s) => id.startsWith(s.id)) ??
     null
   );
@@ -426,6 +637,8 @@ const HERO_SKILL_LORE: Record<string, SkillLore[]> = {
   freud: SKILL_LORE,
   pavlov: PAVLOV_SKILL_LORE,
   skinner: SKINNER_SKILL_LORE,
+  erikson: ERIKSON_SKILL_LORE,
+  ainsworth: AINSWORTH_SKILL_LORE,
 };
 
 export function skillLoreFor(heroId: string): SkillLore[] {
@@ -441,7 +654,7 @@ export const CHARACTER = {
   inGame: [
     "Freud enters Psyrena as The Analyst, a damage dealer who wins by diagnosis rather than by rotation. He brings his own century with him: a black three piece suit and a full grey beard, worn under a charcoal overcoat with glowing trim on the lapels and a smoke grey lens over one eye.",
     "He is the highest ceiling and the highest risk hero on the roster. No other hero punishes a misread as hard, and none of them pays out as spectacularly when the read is right. Most damage dealers ask whether you can execute a sequence. Freud asks whether you actually know the theory.",
-    "He reads the boss by its age band, the same axis Erikson, Piaget and Kohlberg answer. That overlap is deliberate. When Freud cannot name what he is looking at, somebody else on the team usually can.",
+    "He reads the boss by its age band, the same axis Piaget and Kohlberg answer. That overlap is deliberate. When Freud cannot name what he is looking at, somebody else on the team usually can.",
   ],
 
   /** The historical figure, including what modern evidence says. */
@@ -513,6 +726,57 @@ export const SKINNER_CHARACTER = {
     "Operant conditioning is live, applied, contemporary science. It underwrites applied behavior analysis in the clinic and echoes through behavioral economics. Skinner is flagged Contemporary for those tools, even though radical behaviorism as a complete account of the mind remains contested.",
 } as const;
 
+export const ERIKSON_CHARACTER = {
+  codename: "The Life Cycle",
+  realName: "Erik Homburger Erikson",
+  lifespan: "1902 to 1994",
+
+  /** The hero as Psyrena presents him. */
+  inGame: [
+    "Erikson enters Psyrena as The Life Cycle, a damage dealer whose rotation is his theory. Press 1 for the stage, 2 for its virtue, and an add-on attack after each. The buttons name every stage, its age and its virtue as you go, so a run through the cycle is a run through the chart.",
+    "He never has to read the boss. His match is between his own two keys, which makes him a calm, steady damage dealer for a player who is still learning the fight. The skill is in the rhythm: keep 1, attack, 2, attack going, and cash the virtues in with Life Review.",
+    "He wears a charcoal jacket and an open collar, with a glowing hourglass charm at his hip. Time is the axis his whole theory runs on.",
+  ],
+
+  /** The historical figure, including what modern evidence says. */
+  historical: [
+    "Erik Erikson was a German born American psychoanalyst. He trained in Vienna under Anna Freud, never earned a university degree, and went on to teach at Harvard. His book Childhood and Society, in 1950, set out the eight stages of psychosocial development, and he coined the term identity crisis. Gandhi's Truth won him a Pulitzer Prize in 1970.",
+    "Where Freud's stages end in adolescence, Erikson's run from birth to old age, and they are social rather than sexual: each is a crisis between a person and the people around them. His wife and collaborator Joan Erikson later proposed a ninth stage for very old age.",
+    "The stage model is still taught everywhere, but it is hard to test as a whole, and critics have questioned how universal its order and ages are across cultures. Its parts have fared better: James Marcia's identity statuses and later research on generativity turned his ideas into measurable questions.",
+  ],
+
+  /**
+   * Shown as a standing notice on the codex. Doc 07 C-1: influential and
+   * still in use, but loosely testable as a whole model.
+   */
+  evidenceNote:
+    "Erikson's eight stages are a framework more than a tested law. They shape how developmental psychology is taught, and parts of them, identity and generativity above all, are active research. Erikson is flagged Contested throughout the game for that reason.",
+} as const;
+
+export const AINSWORTH_CHARACTER = {
+  codename: "The Safe Haven",
+  realName: "Mary Dinsmore Salter Ainsworth",
+  lifespan: "1913 to 1999",
+
+  /** The hero as Psyrena presents her. */
+  inGame: [
+    "Ainsworth enters Psyrena as The Safe Haven, a tank whose four number keys are the four attachment styles. Each one acts out how a child greets a parent coming back: Secure lets the team recover and go exploring, Avoidant hides the pain and pays it later, Ambivalent clings to the boss's attention and refuses comfort, and Disorganized freezes, then shields everyone but herself.",
+    "She holds the boss with Proximity Maintenance and hands it off with Avoidant or Strange Situation. Her basic attack rewards answering a teammate's hit quickly, which is what she meant by sensitivity.",
+    "She wears a teal cardigan with gold trim and a glowing heart-in-shield at her collar and hip. A safe haven is where you run when you are frightened.",
+  ],
+
+  /** The historical figure, including what modern evidence says. */
+  historical: [
+    "Mary Ainsworth was an American-Canadian developmental psychologist. She was born in Ohio, grew up in Toronto, took her doctorate there under William Blatz, and served in the Canadian Women's Army Corps in the Second World War, rising to major. In London she worked with John Bowlby, whose attachment theory she spent her life testing.",
+    "She watched mothers and babies at home in Uganda, then in Baltimore, and built the Strange Situation to see the patterns in a laboratory. Patterns of Attachment, in 1978, set out the secure, avoidant and ambivalent styles. Mary Main and Judith Solomon later added disorganized attachment.",
+    "The Strange Situation is one of the most replicated procedures in developmental psychology. How common each style is varies between cultures, and how strongly infant attachment predicts adult life is still argued. Her measures of sensitive care remain in use today.",
+  ],
+
+  /** Contemporary: an active, measured research field. */
+  evidenceNote:
+    "Attachment research is live, contemporary science. The Strange Situation and the sensitivity scales are still used, and the theory guides parenting and foster-care work. What is debated is how much the styles vary across cultures and how strongly they predict later life. Ainsworth is flagged Contemporary for that reason.",
+} as const;
+
 /** One shape for every card — the codex renders whoever is selected. */
 export interface HeroCharacter {
   codename: string;
@@ -527,4 +791,6 @@ export const CHARACTERS: Record<string, HeroCharacter> = {
   freud: CHARACTER,
   pavlov: PAVLOV_CHARACTER,
   skinner: SKINNER_CHARACTER,
+  erikson: ERIKSON_CHARACTER,
+  ainsworth: AINSWORTH_CHARACTER,
 };
