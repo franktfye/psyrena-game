@@ -68,11 +68,21 @@ export interface ProjectileSpec {
    *             flies, the same spin language as the CS ring fan.
    *  - "smoke": Freud's basic attack — a grey smoke ring blown at the target,
    *             expanding and thinning like cigar smoke as it drifts.
+   *  - Erikson's set, the life cycle in four props:
+   *    "hourglass" the add-on basic — a small cyan glass hourglass (his
+   *                charm), tumbling end over end;
+   *    "lifering"  key 1, Life Stage — an amber core with one ring orbiting
+   *                it, a single stage of a life on its axis;
+   *    "gem"       key 2, Virtue — a spinning gold bipyramid, the virtue the
+   *                stage yields;
+   *    "spiral"    F, Life Review — three nested rings (amber, gold, cyan)
+   *                spinning on three axes around a white-gold core, a whole
+   *                life cycle turning at once.
    */
   dressing?: DressingKind;
 }
 
-export type DressingKind = "steak" | "bell" | "smoke";
+export type DressingKind = "steak" | "bell" | "smoke" | "hourglass" | "lifering" | "gem" | "spiral" | "heart" | "locket";
 
 export interface CastProjectiles {
   fire(spec: ProjectileSpec): void;
@@ -304,10 +314,134 @@ export function createCastProjectiles(scene: Scene, hero: TransformNode): CastPr
     return finishRig(p, root, spin, [ring, wisp], [puffMat, wispMat]);
   };
 
+  // ---- Erikson's props (cylinders, spheres and tori only: no new builders
+  // in the boot bundle) -------------------------------------------------------
+  const cone = (name: string, top: number, bottom: number, height: number, tess: number): Mesh =>
+    MeshBuilder.CreateCylinder(name, { height, diameterTop: top, diameterBottom: bottom, tessellation: tess }, scene);
+
+  // The hourglass: two glass cones tip to tip between two caps, a grain of
+  // gold sand at the waist. His hourglass charm, thrown.
+  const buildHourglass = (p: Pooled, i: number): DressingRig => {
+    const root = new TransformNode(`eriksonProj_hgRoot_${i}`, scene);
+    const spin = new TransformNode(`eriksonProj_hgSpin_${i}`, scene);
+    spin.parent = root;
+    spin.scaling.setAll(0.75);
+    const glassMat = dressMat(`eriksonProj_hgGlass_${i}`, new Color3(0.35, 0.85, 0.92));
+    const capMat = dressMat(`eriksonProj_hgCap_${i}`, new Color3(0.6, 0.95, 1.0));
+    const sandMat = dressMat(`eriksonProj_hgSand_${i}`, new Color3(0.95, 0.78, 0.35));
+    const upper = cone(`eriksonProj_hgUpM_${i}`, 0.62, 0.05, 0.5, 14);
+    upper.position.y = 0.25;
+    upper.material = glassMat;
+    const lower = cone(`eriksonProj_hgLoM_${i}`, 0.05, 0.62, 0.5, 14);
+    lower.position.y = -0.25;
+    lower.material = glassMat;
+    const capT = cone(`eriksonProj_hgCapT_${i}`, 0.74, 0.74, 0.06, 18);
+    capT.position.y = 0.52;
+    capT.material = capMat;
+    const capB = cone(`eriksonProj_hgCapB_${i}`, 0.74, 0.74, 0.06, 18);
+    capB.position.y = -0.52;
+    capB.material = capMat;
+    const sand = MeshBuilder.CreateSphere(`eriksonProj_hgSandM_${i}`, { diameter: 0.16, segments: 6 }, scene);
+    sand.position.y = -0.38;
+    sand.material = sandMat;
+    return finishRig(p, root, spin, [upper, lower, capT, capB, sand], [glassMat, capMat, sandMat]);
+  };
+
+  // Life Stage: an amber core and one orbiting ring.
+  const buildLifeRing = (p: Pooled, i: number): DressingRig => {
+    const root = new TransformNode(`eriksonProj_lrRoot_${i}`, scene);
+    const spin = new TransformNode(`eriksonProj_lrSpin_${i}`, scene);
+    spin.parent = root;
+    root.rotation.z = 0.5; // a tilted orbit reads at every camera angle
+    const coreMat = dressMat(`eriksonProj_lrCore_${i}`, new Color3(1.0, 0.6, 0.3));
+    const ringMat = dressMat(`eriksonProj_lrRing_${i}`, new Color3(1.0, 0.75, 0.45));
+    const core = MeshBuilder.CreateSphere(`eriksonProj_lrCoreM_${i}`, { diameter: 0.42, segments: 10 }, scene);
+    core.material = coreMat;
+    const ring = MeshBuilder.CreateTorus(`eriksonProj_lrRingM_${i}`, { diameter: 1.0, thickness: 0.07, tessellation: 28 }, scene);
+    ring.material = ringMat;
+    return finishRig(p, root, spin, [core, ring], [coreMat, ringMat]);
+  };
+
+  // Virtue: a gold bipyramid gem.
+  const buildGem = (p: Pooled, i: number): DressingRig => {
+    const root = new TransformNode(`eriksonProj_gemRoot_${i}`, scene);
+    const spin = new TransformNode(`eriksonProj_gemSpin_${i}`, scene);
+    spin.parent = root;
+    spin.scaling.setAll(0.8);
+    const gemMat = dressMat(`eriksonProj_gemMat_${i}`, new Color3(1.0, 0.82, 0.32));
+    const girdleMat = dressMat(`eriksonProj_gemGirdle_${i}`, new Color3(1.0, 0.95, 0.7));
+    const crown = cone(`eriksonProj_gemCrownM_${i}`, 0.0, 0.8, 0.42, 6);
+    crown.position.y = 0.21;
+    crown.material = gemMat;
+    const pavilion = cone(`eriksonProj_gemPavM_${i}`, 0.8, 0.0, 0.62, 6);
+    pavilion.position.y = -0.31;
+    pavilion.material = gemMat;
+    const girdle = MeshBuilder.CreateTorus(`eriksonProj_gemGirdleM_${i}`, { diameter: 0.8, thickness: 0.05, tessellation: 6 }, scene);
+    girdle.material = girdleMat;
+    return finishRig(p, root, spin, [crown, pavilion, girdle], [gemMat, girdleMat]);
+  };
+
+  // Life Review: three nested rings on three axes around a bright core.
+  const buildSpiral = (p: Pooled, i: number): DressingRig => {
+    const root = new TransformNode(`eriksonProj_spRoot_${i}`, scene);
+    const spin = new TransformNode(`eriksonProj_spSpin_${i}`, scene);
+    spin.parent = root;
+    spin.scaling.setAll(1.5);
+    const coreMat = dressMat(`eriksonProj_spCore_${i}`, new Color3(1.0, 0.92, 0.65));
+    const mats = [
+      dressMat(`eriksonProj_spA_${i}`, new Color3(1.0, 0.6, 0.3)),
+      dressMat(`eriksonProj_spB_${i}`, new Color3(1.0, 0.82, 0.35)),
+      dressMat(`eriksonProj_spC_${i}`, new Color3(0.4, 0.9, 0.95)),
+    ];
+    const core = MeshBuilder.CreateSphere(`eriksonProj_spCoreM_${i}`, { diameter: 0.4, segments: 10 }, scene);
+    core.material = coreMat;
+    const rings = [1.3, 1.0, 0.72].map((d, k) => {
+      const r = MeshBuilder.CreateTorus(`eriksonProj_spRingM_${i}_${k}`, { diameter: d, thickness: 0.06, tessellation: 32 }, scene);
+      r.material = mats[k]!;
+      r.rotation.set(k * 1.05, k * 0.6, k * 0.35);
+      return r;
+    });
+    return finishRig(p, root, spin, [core, ...rings], [coreMat, ...mats]);
+  };
+
+  // Ainsworth's heart-in-shield (her brooch; gold for the Earned Security
+  // locket): two spheres and a cone make the heart, a thin disc the shield.
+  // Same primitives as above, so nothing new enters the boot bundle.
+  const buildHeart = (gold: boolean) => (p: Pooled, i: number): DressingRig => {
+    const tag = gold ? "lk" : "ht";
+    const root = new TransformNode(`ainsworthProj_${tag}Root_${i}`, scene);
+    const spin = new TransformNode(`ainsworthProj_${tag}Spin_${i}`, scene);
+    spin.parent = root;
+    spin.scaling.setAll(gold ? 1.25 : 0.8);
+    const heartMat = dressMat(`ainsworthProj_${tag}Heart_${i}`, gold ? new Color3(1.0, 0.82, 0.35) : new Color3(0.35, 0.95, 1.0));
+    const shieldMat = dressMat(`ainsworthProj_${tag}Shield_${i}`, gold ? new Color3(1.0, 0.92, 0.6) : new Color3(0.12, 0.55, 0.62));
+    const lobes = [-1, 1].map((sx) => {
+      const m = MeshBuilder.CreateSphere(`ainsworthProj_${tag}LobeM_${i}_${sx}`, { diameter: 0.34, segments: 10 }, scene);
+      m.position.set(sx * 0.12, 0.08, 0);
+      m.material = heartMat;
+      return m;
+    });
+    const tip = cone(`ainsworthProj_${tag}TipM_${i}`, 0.5, 0.0, 0.36, 16);
+    tip.position.y = -0.14;
+    tip.scaling.z = 0.6;
+    tip.material = heartMat;
+    const shield = cone(`ainsworthProj_${tag}ShieldM_${i}`, 0.78, 0.78, 0.04, 6);
+    shield.rotation.x = Math.PI / 2; // face along the flight path
+    shield.position.z = -0.08;
+    shield.material = shieldMat;
+    return finishRig(p, root, spin, [...lobes, tip, shield], [heartMat, shieldMat]);
+  };
+
   const RIG_BUILDERS: Record<DressingKind, (p: Pooled, i: number) => DressingRig> = {
+    heart: buildHeart(false),
+    locket: buildHeart(true),
     steak: buildSteak,
     bell: buildBell,
     smoke: buildSmoke,
+    hourglass: buildHourglass,
+    lifering: buildLifeRing,
+    gem: buildGem,
+    spiral: buildSpiral,
   };
 
   // Impact flashes: billboarded soft rings that swell and fade on the boss.
@@ -396,6 +530,28 @@ export function createCastProjectiles(scene: Scene, hero: TransformNode): CastPr
         } else if (p.dressing === "bell") {
           // Upright, spinning on its own axis — the CS fan's spin, handheld.
           rig.spin.rotation.y += dt * 7;
+        } else if (p.dressing === "hourglass") {
+          // End over end, the sand flipping with every turn.
+          rig.spin.rotation.z += dt * 6;
+        } else if (p.dressing === "lifering") {
+          // The ring orbits its core; the tilt on the root keeps it legible.
+          rig.spin.rotation.y += dt * 9;
+        } else if (p.dressing === "gem") {
+          // A fast jeweller's spin, with a slow bob so the facets flash.
+          rig.spin.rotation.y += dt * 11;
+          rig.spin.position.y = Math.sin(p.age * 12) * 0.06;
+        } else if (p.dressing === "heart" || p.dressing === "locket") {
+          // A heartbeat: a slow turn, and a double pulse twice a second.
+          rig.spin.rotation.y += dt * 2.4;
+          const beat = Math.max(0, Math.sin(p.age * 12.6)) ** 6;
+          rig.spin.scaling.setAll((p.dressing === "locket" ? 1.25 * (1 + u * 0.5) : 0.8) * (1 + beat * 0.22));
+        } else if (p.dressing === "spiral") {
+          // Three rings, three axes: the whole cycle turning at once, and
+          // swelling as it closes on the target.
+          rig.spin.rotation.x += dt * 3.1;
+          rig.spin.rotation.y += dt * 4.3;
+          rig.spin.rotation.z += dt * 1.7;
+          rig.spin.scaling.setAll(1.5 * (1 + u * 0.6));
         } else {
           // Smoke: ring plane square to the flight, swelling and thinning as
           // it drifts — the far end of a blown ring's life.
@@ -444,6 +600,7 @@ export function createCastProjectiles(scene: Scene, hero: TransformNode): CastPr
         if (p.dressing === "steak") rig.spin.rotation.x = Math.random() * Math.PI * 2;
         if (p.dressing === "bell") rig.spin.rotation.y = Math.random() * Math.PI * 2;
         if (p.dressing === "smoke") rig.spin.scaling.setAll(3.0);
+        if (p.dressing === "spiral") rig.spin.scaling.setAll(1.5);
       }
       // Same launch convention as the ult eye in freudCasts: the Tripo model
       // looks down the wrapper's -Z, so visible "forward" is Backward().

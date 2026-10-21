@@ -41,5 +41,12 @@ sfx-choices.json
 # tracked. Regenerate with `node tools/sync-sfx.mjs` (reads psfx/sfx-choices.json).
 public/assets/sfx/
 
+# Local secrets (API keys, test passwords) — never commit. Template: .env.e2e.example
+.env*
+!.env.e2e.example
+
+# Finished hero clip GLBs: rebuildable from anim/specs + m2mr (tools/motion-video/README.md)
+assets/work/*/anim/glb/
+
 # Python bytecode
 __pycache__/

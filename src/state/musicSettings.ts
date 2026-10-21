@@ -43,6 +43,10 @@ export const MUSIC_TRACKS: readonly MusicTrack[] = [
   { id: "siege_loop_2", label: "Heartbeat Siege 2", src: audioUrl("/assets/bosses/ost/siege_loop_2") },
   { id: "siege_sunrise_1", label: "Siege to Sunrise 1", src: audioUrl("/assets/bosses/ost/siege_sunrise_1") },
   { id: "siege_sunrise_2", label: "Siege to Sunrise 2", src: audioUrl("/assets/bosses/ost/siege_sunrise_2") },
+  // Dream Siege (src/survival/music.ts): 1 → 2 on the waves, Final Wave on the last.
+  { id: "kowloon_fog_1", label: "Kowloon Fog 1", src: audioUrl("/assets/survival/ost/fog1") },
+  { id: "kowloon_fog_2", label: "Kowloon Fog 2", src: audioUrl("/assets/survival/ost/fog2") },
+  { id: "kowloon_fog_final", label: "Kowloon Fog — Final Wave", src: audioUrl("/assets/survival/ost/fog_boss") },
   // Pick-only: in no Auto rotation, heard only when chosen from the dropdown.
   { id: "drafts_in_my_phone", label: "Drafts in My Phone", src: audioUrl("/assets/village/ost/drafts_in_my_phone") },
 ];

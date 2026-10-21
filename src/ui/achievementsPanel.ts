@@ -1,5 +1,5 @@
 /**
- * Achievements panel — the 33-achievement list with category tabs, progress
+ * Achievements panel — the achievement list with category tabs, progress
  * bars, and title equip/unequip (docs/05). Opened from the left dock.
  *
  * Same plain-DOM panel skeleton as hallPanel.ts: one injected CSS block, a
@@ -148,6 +148,7 @@ const TABS: { key: AchievementCategory | "all"; label: string }[] = [
   { key: "boss", label: "Boss" },
   { key: "friends", label: "Friends" },
   { key: "gear", label: "Gear" },
+  { key: "survival", label: "Dream Siege" },
 ];
 
 /** The open panel's close fn, so the left dock can toggle it shut. */

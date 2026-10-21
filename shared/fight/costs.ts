@@ -37,10 +37,12 @@ export type CostKind = "basic" | "palette" | "defense" | "chain" | "ultimate" | 
  */
 export const PALETTE_FOCUS_COST = 8;
 
-export function focusCostFor(hero: Hero, kind: CostKind): number {
+export function focusCostFor(hero: Hero, kind: CostKind, paletteIndex?: number): number {
   switch (kind) {
     case "palette":
-      return PALETTE_FOCUS_COST;
+      // An entry may price itself (Erikson's keys); every other one pays the
+      // flat scaffold.
+      return (paletteIndex !== undefined ? hero.palette[paletteIndex]?.focusCost : undefined) ?? PALETTE_FOCUS_COST;
     case "defense":
       return hero.defense?.focusCost ?? 0;
     case "chain":

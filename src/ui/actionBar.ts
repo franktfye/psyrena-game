@@ -96,6 +96,12 @@ export interface ActionBarOptions {
    */
   paletteWord?: string;
   /**
+   * Touch only: mount the palette entries as their own arc buttons instead of
+   * one wheel opener. For a two-entry palette played as a rhythm (Erikson's
+   * `1-2-1-2`), where a wheel would cost two taps per press.
+   */
+  paletteInline?: boolean;
+  /**
    * Shared global cooldown (ms). When set, ANY successful cast starts it and
    * no slot casts while it runs — doc 02's 1.5 s GCD ("about 40 casts a
    * minute, total, per hero"). Per-slot cooldowns still apply on top. The
@@ -171,6 +177,14 @@ const TOUCH_ARC: Array<{ right: number; bottom: number }> = [
 ];
 const TOUCH_SKILL_SIZE = 66;
 /**
+ * The extra anchor an inline palette's FIRST entry takes, left of the arc's
+ * first slot (the second entry sits on TOUCH_ARC[0]) — so the pair reads 1 → 2
+ * toward the thumb. 75 px from slot 1's centre and 138 px from slot 2's: clear
+ * of both 66 px faces. Its left edge, 289 px from the corner, stays inside the
+ * container's 340 px.
+ */
+const TOUCH_PALETTE_LEAD = { right: 256, bottom: 40 };
+/**
  * The stance slot's centre — ABOVE the arc, crowning it (2026-08-05): a tank's
  * threat toggle is the button the kit pivots on, so it renders full size on
  * top of the other skills instead of as a satellite tucked beside the corner
@@ -196,6 +210,11 @@ export class ActionBar {
   private readonly byKey = new Map<string, string>();
   private readonly layout: "bar" | "touch";
   private readonly paletteWord: string | null;
+  private readonly paletteInline: boolean;
+  /** Slots `setAvailable` turned off: dimmed, and a press quietly does nothing. */
+  private readonly unavailable = new Set<string>();
+  /** Built on the first `setCaption`; kits that never call it never mount one. */
+  private captionEl: HTMLDivElement | null = null;
   private readonly beatEl: HTMLDivElement;
   private rafId = 0;
   private readonly gcdMs: number;
@@ -333,6 +352,7 @@ export class ActionBar {
   ) {
     this.layout = opts.layout ?? "bar";
     this.paletteWord = opts.paletteWord ?? null;
+    this.paletteInline = opts.paletteInline === true;
     this.gcdMs = opts.gcdMs ?? 0;
     this.canCast = opts.canCast ?? null;
     this.onRefused = opts.onRefused ?? null;
@@ -530,7 +550,16 @@ export class ActionBar {
     const basicDef = slots.find((s) => s.kind === "basic");
 
     let paletteEl: HTMLButtonElement | null = null;
-    if (palette.length > 0) {
+    if (this.paletteInline && palette.length > 0) {
+      // Each entry is its own button, cast on tap — no wheel. The last entry
+      // takes the arc's palette anchor; the one before it the lead anchor.
+      const anchors = [TOUCH_PALETTE_LEAD, TOUCH_ARC[0]!].slice(-palette.length);
+      palette.slice(-anchors.length).forEach((def, i) => {
+        const el = this.buildSlot(def, { size: TOUCH_SKILL_SIZE, radius: 999, showKey: false });
+        place(el, anchors[i]!, TOUCH_SKILL_SIZE);
+        this.root.appendChild(el);
+      });
+    } else if (palette.length > 0) {
       // A kit with ONE palette entry has no wheel to open and no stages to
       // name — Pavlov's button is just UCS — so the button IS the skill: it
       // wears its own face and casts directly. No wheel means no second
@@ -576,7 +605,7 @@ export class ActionBar {
     // Defense/Chain/Ultimate buttons sat on top of the open wheel — swallowing
     // taps meant for a palette stage. Only multi-entry palettes get one — a
     // single entry casts straight off its arc button (see above).
-    if (palette.length > 1) this.root.appendChild(this.buildWheel(palette));
+    if (palette.length > 1 && !this.paletteInline) this.root.appendChild(this.buildWheel(palette));
 
     // Beat normally lives on the basic button in this layout; keep the element
     // around (unattached) so `setBeat` stays a single code path. A flat basic
@@ -973,20 +1002,8 @@ export class ActionBar {
     slot.def = def;
     this.slots.set(def.id, slot);
     this.byKey.set(def.key.toLowerCase(), def.id);
-    if (slot.el === this.basicEl) {
-      // The touch corner button (Pavlov's NS ⇄ CS): its face is the two-tier
-      // flat-basic paint from buildBasic — a big head over a small sub-line —
-      // not a generic slot label, so the swap repaints it the same way. The
-      // circle shape, size and position never change; only the words do.
-      const [head, ...rest] = def.label.split("\n");
-      slot.labelEl.textContent = head ?? "";
-      slot.labelEl.style.fontSize = `${fitFontPx(head ?? "", TOUCH_BASIC.size - 14, 28)}px`;
-      const sub = slot.labelEl.nextElementSibling as HTMLElement | null;
-      if (sub) sub.textContent = rest.join(" ");
-    } else {
-      slot.labelEl.textContent = def.label;
-      const base = Number(slot.labelEl.dataset.baseFs ?? 9);
-      slot.labelEl.style.fontSize = `${fitFontPx(def.label, slot.el.offsetWidth - 8, base)}px`;
+    this.paintLabel(slot);
+    if (slot.el !== this.basicEl) {
       const icon = slot.el.querySelector<HTMLElement>("[data-slot-icon]");
       if (icon && def.icon) icon.style.background = `url(${def.icon}) center/cover no-repeat`;
     }
@@ -999,11 +1016,120 @@ export class ActionBar {
     return true;
   }
 
+  /**
+   * Repaint a slot's words from its def. Three faces exist: the touch corner
+   * button (a big head over a small sub-line, from buildBasic), the desktop
+   * flat basic (the same two tiers, from buildBar), and every other slot (one
+   * label, refit to the button). The shape never changes; only the words do.
+   */
+  private paintLabel(slot: SlotState): void {
+    const [head, ...rest] = slot.def.label.split("\n");
+    if (slot.el === this.basicEl) {
+      slot.labelEl.textContent = head ?? "";
+      slot.labelEl.style.fontSize = `${fitFontPx(head ?? "", TOUCH_BASIC.size - 14, 28)}px`;
+      const sub = slot.labelEl.nextElementSibling as HTMLElement | null;
+      if (sub) sub.textContent = rest.join(" ");
+    } else if (slot.def.kind === "basic" && slot.def.flat && slot.labelEl.children.length > 0) {
+      const [headEl, subEl] = slot.labelEl.children as unknown as HTMLElement[];
+      if (headEl) {
+        headEl.textContent = head ?? "";
+        headEl.style.fontSize = `${fitFontPx(head ?? "", 76, 22)}px`;
+      }
+      if (subEl) subEl.textContent = rest.join(" ");
+    } else {
+      slot.labelEl.textContent = slot.def.label;
+      const base = Number(slot.labelEl.dataset.baseFs ?? 9);
+      slot.labelEl.style.fontSize = `${fitFontPx(slot.def.label, slot.el.offsetWidth - 8, base)}px`;
+    }
+  }
+
+  /**
+   * Relabel a slot in place: same id, key and running cooldown, new words
+   * (and, optionally, a new icon face). Erikson's keys 1, 2 and LMB name the stage, virtue and relations
+   * they cast next, and those move on every press — a `replaceSlot` per press
+   * would be a new id each time for what is only a caption.
+   */
+  setLabel(id: string, label: string, icon?: string): void {
+    const slot = this.slots.get(id);
+    if (!slot) return;
+    const iconChanged = icon !== undefined && icon !== slot.def.icon;
+    if (slot.def.label === label && !iconChanged) return;
+    slot.def = { ...slot.def, label, ...(icon !== undefined ? { icon } : {}) };
+    this.paintLabel(slot);
+    // Icon faces only: a slot mounted without art has no face to repaint.
+    const face = iconChanged ? slot.el.querySelector<HTMLElement>("[data-slot-icon]") : null;
+    if (face) face.style.background = `url(${icon}) center/cover no-repeat`;
+  }
+
+  /**
+   * Turn a slot off or on without a cooldown: off dims it, and a press does
+   * nothing — no flash, no popup, so holding a gated basic (the touch corner
+   * repeats every 100 ms) is not a strobe. Erikson's add-on basic is the
+   * first user: it is available only once after each key 1 or key 2.
+   */
+  setAvailable(id: string, available: boolean): void {
+    const slot = this.slots.get(id);
+    if (!slot) return;
+    if (available) this.unavailable.delete(id);
+    else this.unavailable.add(id);
+    slot.el.style.opacity = available ? "" : "0.4";
+  }
+
+  /**
+   * A readout for the whole kit, up to two lines (`\n`) — Erikson's
+   * "Stage 5 · Identity vs Role Confusion · age 12 to 18" over
+   * "press 2 → Fidelity · Virtues 3/8". Desktop: centred above the row, where
+   * the beat pill sits (which it replaces). Touch: right-aligned just above the
+   * thumb cluster — the band between the boss frame and the skill arc, clear
+   * of the chat button and the move stick that share the bottom edge.
+   */
+  setCaption(text: string): void {
+    if (!this.captionEl) {
+      const el = document.createElement("div");
+      el.id = "action-caption";
+      // Top of the arc's highest button, in the cluster's scaled frame.
+      const arcTop = Math.max(...TOUCH_ARC.map((a) => a.bottom)) + TOUCH_SKILL_SIZE / 2;
+      el.style.cssText = [
+        "position:fixed",
+        ...(this.layout === "touch"
+          ? [
+              `bottom:calc(${Math.round(arcTop * uiScale() * 0.8) + 10}px + env(safe-area-inset-bottom, 0px))`,
+              "right:calc(14px + env(safe-area-inset-right, 0px))",
+              "max-width:min(380px,46vw)",
+              "text-align:right",
+              "border-radius:10px",
+            ]
+          : [
+              "bottom:calc(78px + env(safe-area-inset-bottom, 0px))",
+              "left:50%",
+              "transform:translateX(-50%)",
+              "max-width:min(620px,60vw)",
+              "text-align:center",
+              "border-radius:12px",
+            ]),
+        "padding:3px 12px",
+        "background:rgba(8,10,16,.78)",
+        `border:1px solid ${KIND_ACCENT.palette}55`,
+        "color:#eaf7ff",
+        "font:600 12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace",
+        "white-space:pre-line",
+        "pointer-events:none",
+        "z-index:10",
+      ].join(";");
+      document.body.appendChild(el);
+      this.captionEl = el;
+      // One readout, not two: the flat-basic beat pill shares the spot.
+      this.beatEl.style.display = "none";
+    }
+    this.captionEl.textContent = text;
+  }
+
   /** Attempt a cast. Returns false while the slot is on cooldown or the GCD runs. */
   cast(id: string): boolean {
     const now = performance.now();
     const slot = this.slots.get(id);
     if (!slot || now < slot.readyAt) return false;
+    if (this.unavailable.has(id)) return false;
     // The basic attack lives outside the GCD: it answers only to its own
     // cooldown, so it can weave freely between skill casts (and vice versa).
     // Free presses: the basic (doc 02 exempts it) and a stance toggle, which
@@ -1161,6 +1287,7 @@ export class ActionBar {
     // pill when a flat basic put it there — leaving it behind strands a
     // readout for a hero the next scene may not even be running.
     this.tip.dispose();
+    this.captionEl?.remove();
     this.beatEl.remove();
     this.root.remove();
   }

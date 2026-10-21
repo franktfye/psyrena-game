@@ -182,6 +182,13 @@ const SCENES: Record<string, { label: string; factory: SceneFactory }> = {
     label: "Practice Booth",
     factory: (engine) => createPracticeBooth(engine, sessionProfile.selectedHero),
   },
+  // The survival map (docs/survival-design.md §12). Lazy: its chunk carries the
+  // map data and dressing, none of which the village needs on first frame.
+  kowloon: {
+    label: "Old Kowloon",
+    factory: async (engine) =>
+      (await import("./scenes/oldKowloon")).createOldKowloon(engine, sessionProfile.selectedHero, sessionProfile.username),
+  },
 };
 
 /**
@@ -348,6 +355,18 @@ async function main(): Promise<void> {
     );
   };
 
+  // A party Dream Siege (server/survival.mjs): every member walks into Old
+  // Kowloon, where the run mirrors the server session. Lazy: pending.ts is
+  // survival code (CLAUDE.md rule 3).
+  window.addEventListener("psy:survival", (e) => {
+    const { type, data } = (e as CustomEvent<{ type: string; data: { session: number; difficulty: string } }>).detail;
+    if (type !== "survivalLaunch" || document.body.dataset.scene !== "village") return;
+    void import("./survival/pending").then(({ setPendingRun }) => {
+      setPendingRun(data.difficulty as "lucid" | "deep" | "terror", { session: data.session });
+      void go("kowloon");
+    });
+  });
+
   // The party leader started the fight: every member walks into the arena on
   // their own client, through the same admission gate the portal uses. The
   // ready barrier in the arena scene then holds the countdown until everyone
@@ -512,7 +531,9 @@ async function main(): Promise<void> {
 
   // Boot into the village. It is the hub, it is the first thing a player sees,
   // and it is where the loop starts (doc 01).
-  await go("village");
+  // `?scene=kowloon` opens the survival map directly (until the survival queue
+  // exists to take players there).
+  await go(new URLSearchParams(location.search).get("scene") === "kowloon" ? "kowloon" : "village");
   // Made it. Nothing wedged, so the recovery buttons must never appear.
   clearTimeout(stallTimer);
   void registerOfflineCache();

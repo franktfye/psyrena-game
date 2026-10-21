@@ -60,13 +60,15 @@ import { showCastWarning } from "../ui/castWarning";
 import { TouchStick, STICK_RUN_AT } from "../ui/touchStick";
 import { detectControlScheme, uiScale, isTypingInField } from "../ui/inputMode";
 import { wireBasicAttack } from "../fight/basicAttack";
-import { MODELED_HEROES } from "../fight/arenaHero";
+import { MODELED_HEROES, SKILL_ICON_HEROES, stanceKey } from "../fight/arenaHero";
 import { player } from "../state/player";
 import {
   basicProjectileStyle,
   createHeroSkillVfx,
   paletteTint,
+  paletteDressing,
   ultimateTint,
+  ultimateDressing,
   type HeroSkillVfx,
 } from "../vfx/heroCasts";
 import type { FreudCastKind } from "../vfx/freudCasts";
@@ -74,6 +76,7 @@ import { createCastProjectiles, type CastProjectiles } from "../vfx/projectiles"
 import { buildBlackHolePortal } from "../vfx/blackHolePortal";
 import { openRoomsPanel, closeRoomsPanel, configureRoomsPanel } from "../ui/roomsPanel";
 import { setPracticeMode } from "../fight/practice";
+import { buildSurvivalGate } from "./survivalPortal";
 import { enterRankedArena } from "../fight/arenaEntry";
 import { STAGE_DETAIL } from "../ui/heroLore";
 import { openPracticePitIntro } from "../ui/practicePit";
@@ -101,6 +104,17 @@ import { FREUD } from "@shared/heroes/freud";
 import { heroById } from "@shared/heroes";
 import type { Hero, PaletteEntry } from "@shared/types";
 import { BEAT_PERIOD_S, heroHeightM } from "@shared/combat";
+import {
+  castAddon,
+  castLifeStage,
+  castVirtue,
+  lifeReview,
+  psychosocialStart,
+  type PsychosocialHudState,
+  type PsychosocialState,
+} from "@shared/fight/psychosocial";
+import { psychosocialFaces } from "../ui/psychosocialFaces";
+import { stageBannerFor } from "../ui/stageBanner";
 import { applyPipelineQuality, sceneGlowOptions } from "../core/quality";
 import { audioUrl } from "../core/audio";
 
@@ -715,6 +729,9 @@ export async function createVillageHub(engine: AbstractEngine, profile?: Profile
     )
   );
   tickers.push(portal);
+  // The Dream Siege pailou on the plaza edge (survival mode). Also before the
+  // collider sweep, so its pillars are solid.
+  const survivalGate = await buildSurvivalGate(scene);
 
   tickers.push(...(await buildCrowd(scene, mats)));
   tickers.push(...(await buildShopNpcs(scene, kit)));
@@ -724,6 +741,7 @@ export async function createVillageHub(engine: AbstractEngine, profile?: Profile
   const selectedHero = heroById(profile?.selectedHero);
   const hero = await buildFreud(scene, mats, { heroId: selectedHero.id });
   tickers.push({ tick: hero.tick });
+  tickers.push(survivalGate.watch(hero.node));
 
   // Floating name + equipped-title captions over the hero. The title lives on
   // the module (setLocalHeroTitle) so an equip survives a scene rebuild; the
@@ -999,7 +1017,7 @@ export function finishVillageRender(
 // Materials
 // ---------------------------------------------------------------------------
 
-function createMaterials(scene: Scene): Mats {
+export function createMaterials(scene: Scene): Mats {
   const pavement = new PBRMaterial("pavement", scene);
   pavement.albedoColor = VILLAGE_DAY.pavement.clone();
   pavement.metallic = 0.25;
@@ -3641,6 +3659,12 @@ type CastKind = BarSlotDef["kind"];
 interface HeroFx {
   /** Set on skill cast; the controller plays the matching gesture and clears it. */
   cast: CastKind | null;
+  /**
+   * Where the cast was aimed (the bar's `target` hook), or null when the
+   * scene has nothing to aim at (the village square). Set with `cast`; the
+   * controller holds the combat stance on it (COMBAT_FACE_S).
+   */
+  focus?: (() => Vector3) | null;
 }
 
 /**
@@ -3649,7 +3673,8 @@ interface HeroFx {
  * fires jump/cast/hit one-shots; the animator owns clip weights and cadence.
  */
 interface HeroAnimator {
-  update(dt: number, state: { speed: number; moving: boolean }): void;
+  /** `backward`: stepping away from what the hero faces — the walk clip plays in reverse. */
+  update(dt: number, state: { speed: number; moving: boolean; backward?: boolean }): void;
   /** Launch half of the jump (`jump_start`); the controller owns the arc. */
   triggerJump(): void;
   /** Touchdown half (`jump_land`) — the controller fires it when the arc ends. */
@@ -3772,7 +3797,11 @@ async function buildFreudAuthored(
   opts: BuildFreudOptions
 ): Promise<HeroHandle> {
   const heroId = opts.heroId ?? "freud";
-  const result = await trackLoad(ImportMeshAsync(`/assets/heroes/${heroId}.glb`, scene));
+  // A hero with no shipped glb borrows Freud's body, as in the arena
+  // (arenaHero.ts). `heroId` still decides height and companions below, so the
+  // borrower gets the bare rig: no drone, no pipe.
+  const modelId = MODELED_HEROES.has(heroId) ? heroId : "freud";
+  const result = await trackLoad(ImportMeshAsync(`/assets/heroes/${modelId}.glb`, scene));
 
   // A glb that ships with clips takes the rigged path: real skeleton, real
   // walk/run/jump/cast animation. The bake-and-auto-rig path below stays as
@@ -4077,6 +4106,14 @@ function createHeroAnimator(
   startLoop(idle, 1);
   startLoop(walk, 0);
   startLoop(run, 0);
+  // Backpedal: the walk clip played in reverse (combat stance, COMBAT_FACE_S).
+  // A copy of its own rather than a sign flip on `walk`, so going forward
+  // again never jumps the forward gait's phase.
+  const walkBack = walk ? walk.clone(`${walk.name}_back`, (t) => t) : null;
+  if (walkBack) {
+    walkBack.start(true, -1);
+    walkBack.setWeightForAllAnimatables(0);
+  }
 
   // Idle cadence: greet, then REST. The Greeting loop doesn't repeat back to
   // back — each cycle ends with ~3 s frozen on its boundary frame (the
@@ -4140,6 +4177,7 @@ function createHeroAnimator(
   let wIdle = 1;
   let wWalk = 0;
   let wRun = 0;
+  let wBack = 0;
   // One full-body takeover at a time (jump / ult / hit / fight-style cast):
   // locomotion weights drop to zero while `takenOver` is up, and the clip's
   // end observer clears it. Fight style also full-bodies the throw clip
@@ -4216,7 +4254,7 @@ function createHeroAnimator(
   }
 
   return {
-    update(dt, { speed, moving }) {
+    update(dt, { speed, moving, backward = false }) {
       lastMoving = moving;
       // Tick the idle rest gap down; the greeting resumes when it expires.
       if (idle && idleRest > 0) {
@@ -4248,18 +4286,29 @@ function createHeroAnimator(
           tIdle = 0;
         }
       }
+      // Backpedalling hands the walk share to the reversed copy (never a run).
+      let tBack = 0;
+      if (backward && walkBack) {
+        tBack = tWalk + tRun;
+        tWalk = 0;
+        tRun = 0;
+      }
       if (takenOver) {
         tIdle = 0;
         tWalk = 0;
         tRun = 0;
+        tBack = 0;
       }
       const k = Math.min(1, dt * 9);
       wIdle += (tIdle - wIdle) * k;
       wWalk += (tWalk - wWalk) * k;
       wRun += (tRun - wRun) * k;
+      wBack += (tBack - wBack) * k;
       idle?.setWeightForAllAnimatables(wIdle);
       walk?.setWeightForAllAnimatables(wWalk);
       run?.setWeightForAllAnimatables(wRun);
+      walkBack?.setWeightForAllAnimatables(wBack);
+      if (walkBack) walkBack.speedRatio = -Math.min(1.9, Math.max(0.8, speed / WALK_NATURAL));
       // Hard caps: past these, a 60 fps gait cycle alternates legs every
       // handful of frames and the eye reads flicker, not hustle. The walk
       // cycle is longer than the run's, so it tolerates more over-crank
@@ -4644,9 +4693,9 @@ const FREUD_VOICE: HeroVoicePack = {
 };
 
 /**
- * Pavlov speaks through `eric` with a thick-Russian-accent instruct —
- * deliberately not Freud's `uncle_fu`, so the two heroes never blur
- * (tools/gen-pavlov-voice.sh). NS/CS share one button (the bell transforms
+ * Pavlov (VoxCPM2 pack — assets/work/pavlov/voice): a designed-then-cloned
+ * Russian bass, well below Erikson and Skinner (tools/gen-pavlov-voice.sh).
+ * NS/CS share one button (the bell transforms
  * while the boss is CONDITIONED) but are different casts, so CS gets its own
  * line; NS is the silent bell (see `cast` docs).
  */
@@ -4663,9 +4712,9 @@ const PAVLOV_VOICE: HeroVoicePack = {
   },
   idle: ["idle_01", "idle_02", "idle_03"],
   captions: {
-    idle_01: "You hear the bell. You feel hungry. Congratulations — you are science!",
-    idle_02: "I miss my dogs. You drool less… but you learn slower.",
-    idle_03: "Stand still much longer, and you become the control group.",
+    idle_01: "Nobel Prize, 1904, for digestion. The bell came later.",
+    idle_02: "My dogs learned faster than you, and they could not read the tooltip.",
+    idle_03: "Standing still? Noted: subject is not hungry.",
   },
 };
 
@@ -4702,12 +4751,84 @@ const SKINNER_VOICE: HeroVoicePack = {
   },
 };
 
+/**
+ * Erikson (VoxCPM2 pack — assets/work/erikson/voice). Keys 1 and 2 speak the
+ * crisis and the virtue of the stage they cast, so their entries are keyed
+ * per stage (`erikson.stage:5` → "Identity versus role confusion."); callers
+ * build the key with `voiceKeyFor`.
+ */
+const ERIKSON_VOICE: HeroVoicePack = {
+  base: `${VOICE_BASE}/erikson`,
+  museName: "Erikson",
+  cast: {
+    ...Object.fromEntries(
+      [1, 2, 3, 4, 5, 6, 7, 8].flatMap((n) => [
+        [`erikson.stage:${n}`, `stage_${n}`],
+        [`erikson.virtue:${n}`, `virtue_${n}`],
+      ])
+    ),
+    "erikson.moratorium": "cast_moratorium",
+    "erikson.identity-crisis": "cast_identity_crisis",
+    "erikson.life-review": "cast_life_review",
+  },
+  idle: ["idle_01", "idle_02", "idle_03"],
+  captions: {
+    idle_01: "I named myself Erikson. Erik, son of Erik. Now that is identity formation.",
+    idle_02: "Freud stopped at puberty. I kept going. Somebody has to look after the grandparents.",
+    idle_03: "No university degree, and still they gave me an office at Harvard. Industry beats inferiority.",
+  },
+};
+
+/**
+ * Ainsworth: a warm alto in her sixties, designed then cloned
+ * (tools/gen-ainsworth-voice.sh). Keys 1–4 act out each attachment style's
+ * reunion, short enough for the GCD; history and jokes sit on E/R/F, the
+ * Proximity Maintenance stance and the idles. The skill ids are the kit's
+ * planned ones (shared/heroes/ainsworth.ts is the next step), so they speak as
+ * soon as the kit lands.
+ */
+const AINSWORTH_VOICE: HeroVoicePack = {
+  base: `${VOICE_BASE}/ainsworth`,
+  museName: "Ainsworth",
+  cast: {
+    "ainsworth.secure": "cast_secure",
+    "ainsworth.avoidant": "cast_avoidant",
+    "ainsworth.ambivalent": "cast_ambivalent",
+    "ainsworth.disorganized": "cast_disorganized",
+    "ainsworth.safe-haven": "cast_safe_haven",
+    "ainsworth.strange-situation": "cast_strange_situation",
+    "ainsworth.earned-security": "cast_earned_security",
+    "ainsworth.proximity-maintenance": "cast_proximity_maintenance",
+  },
+  idle: ["idle_01", "idle_02", "idle_03"],
+  captions: {
+    idle_01: "Eight episodes, twenty minutes, one stranger. Best twenty minutes in psychology.",
+    idle_02: "John Bowlby had the theory. I had the clipboard. And the babies.",
+    idle_03: "I was a major in the Canadian army, you know. Toddlers are much harder to command.",
+  },
+};
+
 /** Unknown ids fall back to Freud — same rule `heroById` applies to the rig. */
 const VOICE_PACKS: Record<string, HeroVoicePack> = {
   freud: FREUD_VOICE,
   pavlov: PAVLOV_VOICE,
   skinner: SKINNER_VOICE,
+  erikson: ERIKSON_VOICE,
+  ainsworth: AINSWORTH_VOICE,
 };
+
+/**
+ * The voice-line key for a cast. Erikson's keys 1 and 2 speak the stage they
+ * cast, so they key on the rotation as it stood BEFORE the press (key 2's
+ * matched pair answers the armed stage, which is still `stage` until the cast
+ * lands). Every other slot keys on its id.
+ */
+export function voiceKeyFor(kit: Hero, slotId: string, ps: PsychosocialHudState | null): string {
+  if (!kit.psychosocial || !ps) return slotId;
+  const entry = kit.palette.find((p) => p.id === slotId);
+  const rotates = entry?.effects.some((e) => e.kind === "psychosocial.stage" || e.kind === "psychosocial.virtue");
+  return rotates ? `${slotId}:${ps.stage + 1}` : slotId;
+}
 /**
  * First idle musing after Freud has been truly at rest this long.
  * Shorter than the between-line interval so standing still is rewarded sooner.
@@ -5104,6 +5225,14 @@ const CAST_GESTURE_S = 0.38;
  * idle line lands ~this + `IDLE_VOICE_FIRST_S` after the fight.
  */
 const COMBAT_LINGER_S = 12;
+/**
+ * Combat stance: for this long after a cast at a target, the hero keeps facing
+ * it (as monsters face him) instead of turning to his movement. Stepping
+ * sideways or back walks — back plays the walk in reverse, a little slower —
+ * and only moving TOWARD the target may run. The stance ends on its own.
+ */
+const COMBAT_FACE_S = 3;
+const BACKPEDAL_MULT = 0.85;
 
 /**
  * WASD / thumbstick character controller with camera follow.
@@ -5129,7 +5258,13 @@ export function createHeroController(
   hero: HeroHandle,
   mats: Mats,
   colliders: StaticCollider[],
-  voice: HeroVoice
+  voice: HeroVoice,
+  /**
+   * Replaces the hub's radial walk limit + prop push-out, for scenes whose
+   * solidity is map data rather than a disc (the survival map: shared boxes
+   * the server clamps against too). Mutates the position in place.
+   */
+  clamp?: (pos: Vector3) => void
 ): Ticker {
   const node = hero.node;
   const pose = hero.pose;
@@ -5236,6 +5371,9 @@ export function createHeroController(
   /** Seconds since the last cast gesture started. */
   let castAge = Infinity;
   let yaw = node.rotation.y;
+  /** Combat stance: what to face, and for how much longer. */
+  let focus: (() => Vector3) | null = null;
+  let focusT = 0;
 
   return {
     tick: (t: number) => {
@@ -5271,6 +5409,17 @@ export function createHeroController(
       }
       const moving = forward !== 0 || strafe !== 0;
       let speedNow = 0;
+      // Combat stance: a unit vector at the target, while it lasts.
+      focusT -= dt;
+      let face: { x: number; z: number } | null = null;
+      if (focus && focusT > 0) {
+        const p = focus();
+        const fx = p.x - node.position.x;
+        const fz = p.z - node.position.z;
+        const fl = Math.hypot(fx, fz);
+        if (fl > 0.5) face = { x: fx / fl, z: fz / fl };
+      }
+      let backward = false;
 
       // Idle musings loop only while he is truly at rest: not walking, not
       // mid-hop, and out of combat — `castAge` is seconds since the last skill
@@ -5287,6 +5436,11 @@ export function createHeroController(
         // Normalising discards the stick's magnitude on purpose — `tilt` applies
         // it to SPEED below, so diagonal input is not faster than cardinal.
         const dir = f.scale(forward).add(r.scale(strafe)).normalize();
+        // In the stance only a step toward the target may run; sideways and
+        // back walk, and back is a backpedal.
+        const along = face ? dir.x * face.x + dir.z * face.z : 1;
+        if (along < 0.5) run = false;
+        backward = along < -0.35;
 
         // Analog speed curve. Below the sprint threshold, tilt scales across the
         // walk range; past it, speed ramps from walk to run over the remaining
@@ -5296,22 +5450,26 @@ export function createHeroController(
           ? WALK_SPEED +
             (RUN_SPEED - WALK_SPEED) * Math.min(1, (tilt - STICK_RUN_AT) / (1 - STICK_RUN_AT))
           : WALK_SPEED * Math.min(1, tilt / STICK_RUN_AT);
-        speedNow = speed;
-        node.position.addInPlace(dir.scale(speed * dt));
+        speedNow = backward ? speed * BACKPEDAL_MULT : speed;
+        node.position.addInPlace(dir.scale(speedNow * dt));
 
-        // Radial clamp — the fog wall is not a place to stand.
-        const d = Math.hypot(node.position.x, node.position.z);
-        if (d > WALK_LIMIT) {
-          node.position.x *= WALK_LIMIT / d;
-          node.position.z *= WALK_LIMIT / d;
+        if (clamp) {
+          clamp(node.position);
+        } else {
+          // Radial clamp — the fog wall is not a place to stand.
+          const d = Math.hypot(node.position.x, node.position.z);
+          if (d > WALK_LIMIT) {
+            node.position.x *= WALK_LIMIT / d;
+            node.position.z *= WALK_LIMIT / d;
+          }
+
+          // Solidity: push out of props, crowd and street furniture. After the
+          // clamp so a push never strands him past the walk limit unresolved.
+          resolveStaticColliders(node.position, colliders);
         }
 
-        // Solidity: push out of props, crowd and street furniture. After the
-        // clamp so a push never strands him past the walk limit unresolved.
-        resolveStaticColliders(node.position, colliders);
-
-        // Face movement. The hero models face -Z at yaw 0, hence the +PI.
-        const target = Math.atan2(dir.x, dir.z) + Math.PI;
+        // Face movement (or the target, in the stance). The hero models face -Z at yaw 0, hence the +PI.
+        const target = face ? Math.atan2(face.x, face.z) + Math.PI : Math.atan2(dir.x, dir.z) + Math.PI;
         yaw = lerpAngle(yaw, target, Math.min(1, dt * 12));
 
         // Ease body language in rather than keying it off raw input, so a tap
@@ -5321,6 +5479,7 @@ export function createHeroController(
         bobPhase += dt * speed * 2.4;
       } else {
         stride += (0 - stride) * Math.min(1, dt * 6);
+        if (face) yaw = lerpAngle(yaw, Math.atan2(face.x, face.z) + Math.PI, Math.min(1, dt * 12));
       }
       // Footfall bounce (deeper the faster he goes) or idle breath — either way
       // it is the GROUND component of height; the jump arc stacks on top.
@@ -5365,6 +5524,10 @@ export function createHeroController(
         const kind = hero.fx.cast;
         hero.fx.cast = null;
         castAge = 0;
+        if (hero.fx.focus) {
+          focus = hero.fx.focus;
+          focusT = COMBAT_FACE_S;
+        }
         anim?.triggerCast(kind);
       } else {
         castAge += dt;
@@ -5424,7 +5587,7 @@ export function createHeroController(
 
       // Clip-driven path: hand the locomotion state to the animator, which
       // owns idle/walk/run blending, cadence and the jump/cast one-shots.
-      anim?.update(dt, { speed: speedNow, moving });
+      anim?.update(dt, { speed: speedNow, moving, backward });
 
       blob.position.set(node.position.x, 0.02, node.position.z);
 
@@ -5503,6 +5666,11 @@ export interface SkillBarHandle {
     contingency: "positive" | "negative";
     consequence: "reinforcement" | "punishment";
   }): void;
+  /**
+   * Repaint Erikson's keys 1/2/LMB and the stage caption from the fight's
+   * rotation (`psychosocialChanged`). No-op for kits without one.
+   */
+  setPsychosocial(state: PsychosocialHudState): void;
   /** The palette entry ids the bar mounted, in slot order — for Fixation. */
   paletteIds: readonly string[];
   /**
@@ -5557,6 +5725,13 @@ export interface SkillBarHooks {
    * (cast announcements for village presence) while still having no sim.
    */
   simDrivesOperant?: boolean;
+  /**
+   * The scene runs a fight sim that OWNS Erikson's rotation (drives keys
+   * 1/2/LMB through `setPsychosocial` from its `psychosocialChanged`).
+   * Without it, the bar walks the same state machine itself so the village
+   * teaches the same `1-2-1-2` the fight plays.
+   */
+  simDrivesPsychosocial?: boolean;
 }
 
 export function setupSkillBar(
@@ -5585,7 +5760,9 @@ export function setupSkillBar(
   // tile face and shipped as small webp for the DOM bar — see the "Skill
   // icons" notes in assets/work/*/README.md. Palette ids end in the icon's
   // own name (freud.stage.oral → oral.webp, pavlov.ucs → ucs.webp).
-  const ICONS = `/assets/ui/skills/${kit.id}`;
+  const ICONS = SKILL_ICON_HEROES.has(kit.id) ? `/assets/ui/skills/${kit.id}` : null;
+  /** A skill icon URL, or undefined for a hero whose icon set is not drawn yet. */
+  const skillIcon = (name: string): string | undefined => (ICONS ? `${ICONS}/${name}.webp` : undefined);
   const slug = (id: string): string => (id.split(".").pop() ?? id).replace(/-/g, "_");
   const wrapLabel = (name: string): string => {
     const words = name.split(" ");
@@ -5621,17 +5798,28 @@ export function setupSkillBar(
     // Shown uppercased as the key badge. Never matches a KeyboardEvent.key,
     // so the keyboard path stays inert — the pointer observable below casts.
     key: "lmb",
-    label: kit.id === "pavlov" ? "NS\nBell" : kit.id === "skinner" ? "Response\nRate" : "Id\nAttack",
-    tooltip: kit.beats
-      ? "Basic attack. Damage rides the current beat of the cycle. Left click."
-      : `Basic attack. Flat ${kit.basic.base} damage. Left click.`,
+    label:
+      kit.id === "pavlov"
+        ? "NS\nBell"
+        : kit.id === "skinner"
+          ? "Response\nRate"
+          : kit.psychosocial
+            ? "Significant\nRelations"
+            : kit.id === "ainsworth"
+              ? "Sensitivity"
+              : "Id\nAttack",
+    tooltip: kit.psychosocial
+      ? `Add-on attack. Flat ${kit.basic.base} damage, once after each key 1 or key 2. Left click.`
+      : kit.beats
+        ? "Basic attack. Damage rides the current beat of the cycle. Left click."
+        : `Basic attack. Flat ${kit.basic.base} damage. Left click.`,
     // The kit's real basic cooldown — Pavlov's 2 s bell IS his balance
     // (pavlov.ts S5), and the hub bar teaches the arena's rhythm.
     cooldownMs: kit.basic.cooldownMs,
     kind: "basic",
     flat: kit.beats === undefined,
     ...(transformsBasic
-      ? { paletteFace: true, icon: `${ICONS}/${slug(BASIC_ID)}.webp` }
+      ? { paletteFace: true, icon: skillIcon(slug(BASIC_ID)) }
       : {}),
   };
   const mountTransforming = hooks.mountTransforming === true;
@@ -5645,8 +5833,14 @@ export function setupSkillBar(
       label: p.name.replace(" Stage", "").split(" — ")[0] ?? p.name,
       tooltip: p.answersAxis
         ? `${p.name}. Deals ${p.base} damage and places an Analysis Mark. While the boss shapeshifts: the correct answer when it takes the form of ${STAGE_DETAIL[p.id]?.form ?? "this stage"} — outside the transformation no stage is wrong.`
-        : `${p.name}. Deals ${p.base} damage. In a fight, opens the window a bell pairs into.`,
-      icon: `${ICONS}/${slug(p.id)}.webp`,
+        : kit.psychosocial
+          ? p.effects.some((e) => e.kind === "psychosocial.stage")
+            ? `${p.name}. Deals ${p.base} damage and casts the current life stage. Then press 2 for its virtue.`
+            : `${p.name}. After key 1: deals ${p.base} damage and completes the stage. One add-on basic follows each key.`
+          : p.effects.some((e) => e.kind === "ucr.window")
+            ? `${p.name}. Deals ${p.base} damage. In a fight, opens the window a bell pairs into.`
+            : `${p.name}. Deals ${p.base} damage. The full effect is in the codex and on the arena bar.`,
+      icon: skillIcon(slug(p.id)),
       cooldownMs: 1_500,
       kind: "palette" as const,
     })),
@@ -5656,10 +5850,10 @@ export function setupSkillBar(
       ? [
           {
             id: kit.threatStance.id,
-            key: "4",
+            key: stanceKey(hubPalette.length),
             label: wrapLabel(kit.threatStance.name),
             tooltip: `${kit.threatStance.name}. Toggle: while held you bank ${kit.threatStance.multiplier}x threat, so the boss looks at you. Free, no cooldown.`,
-            icon: `${ICONS}/${slug(kit.threatStance.id)}.webp`,
+            icon: skillIcon(slug(kit.threatStance.id)),
             cooldownMs: 0,
             kind: "stance" as const,
           },
@@ -5676,8 +5870,8 @@ export function setupSkillBar(
       label: kit.reinforcement ? "Negative" : wrapLabel(kit.defense.name),
       tooltip: `${kit.defense.name}. Heals ${kit.defense.heal ?? 0}${kit.defense.healTarget === "team" ? ", split across the team" : ""}.`,
       icon: kit.reinforcement
-        ? `${ICONS}/contingency_negative.webp`
-        : `${ICONS}/${slug(kit.defense.id)}.webp`,
+        ? skillIcon("contingency_negative")
+        : skillIcon(slug(kit.defense.id)),
       cooldownMs: kit.defense.cooldownMs,
       kind: "defense",
     },
@@ -5687,8 +5881,8 @@ export function setupSkillBar(
       label: kit.reinforcement ? "Punish" : wrapLabel(kit.chain.name),
       tooltip: `${kit.chain.name}. Deals ${kit.chain.base} damage.`,
       icon: kit.reinforcement
-        ? `${ICONS}/consequence_punishment.webp`
-        : `${ICONS}/${slug(kit.chain.id)}.webp`,
+        ? skillIcon("consequence_punishment")
+        : skillIcon(slug(kit.chain.id)),
       cooldownMs: kit.chain.cooldownMs,
       kind: "chain",
     },
@@ -5696,8 +5890,10 @@ export function setupSkillBar(
       id: kit.ultimate.id,
       key: "f",
       label: wrapLabel(kit.ultimate.name),
-      tooltip: `${kit.ultimate.name}. Deals ${kit.ultimate.base} damage plus ${kit.ultimate.perMark} for every Mark consumed, up to ${kit.ultimate.maxMarksConsumed} Marks.`,
-      icon: `${ICONS}/${slug(kit.ultimate.id)}.webp`,
+      tooltip: kit.psychosocial
+        ? `${kit.ultimate.name}. Deals ${kit.ultimate.base} damage plus ${kit.ultimate.perMark} for every virtue banked, up to ${kit.ultimate.maxMarksConsumed}.`
+        : `${kit.ultimate.name}. Deals ${kit.ultimate.base} damage plus ${kit.ultimate.perMark} for every Mark consumed, up to ${kit.ultimate.maxMarksConsumed} Marks.`,
+      icon: skillIcon(slug(kit.ultimate.id)),
       cooldownMs: kit.ultimate.cooldownMs,
       kind: "ultimate",
     },
@@ -5727,6 +5923,10 @@ export function setupSkillBar(
    */
   const hubOperant: { contingency: "positive" | "negative"; consequence: "reinforcement" | "punishment" } =
     { contingency: "positive", consequence: "reinforcement" };
+  /** The hub's own copy of Erikson's rotation — cosmetic, same as above. */
+  const hubPsycho: PsychosocialState | null = kit.psychosocial ? psychosocialStart() : null;
+  /** The rotation as last painted (hub copy or the pit's sim) — keys the VO. */
+  let lastPsycho: PsychosocialHudState | null = hubPsycho ? { ...hubPsycho } : null;
 
   // Focus costs and self-buffs feed the player frame (top-left HUD). The
   // defense/chain/ult costs are the kit's real numbers; palette casts get a
@@ -5741,6 +5941,10 @@ export function setupSkillBar(
     ultimate: kit.ultimate.focusCost ?? 0,
     stance: 0, // a threat stance is free by definition (ThreatStance.toggle)
   };
+  // An entry may price itself (Erikson's keys, `PaletteEntry.focusCost`).
+  const slotFocusCost = (slot: BarSlotDef): number =>
+    (slot.kind === "palette" ? kit.palette.find((p) => p.id === slot.id)?.focusCost : undefined) ??
+    FOCUS_COST[slot.kind];
   // Buff-tile length = the skill's longest timed effect where the kit has one
   // (Pavlov's R vulnerability runs 15 s, his F dome 10 s — the tile must not
   // undersell the window); kits with untimed effects keep the old defaults.
@@ -5836,6 +6040,25 @@ export function setupSkillBar(
         hooks.onCast?.(slot, () => {});
         return;
       }
+      let hubRefund = 0;
+      // Keyed before the rotation moves: key 2 speaks the virtue it answers.
+      // The same key lights the right stage in Erikson's skill VFX, and the
+      // centre banner flashes the stage or virtue.
+      const voiceKey = voiceKeyFor(kit, slot.id, lastPsycho);
+      stageBannerFor(kit, slot.id, lastPsycho);
+      // Erikson in the village: no sim, so the bar walks the rotation itself
+      // (shared/fight/psychosocial.ts, the rules the fight runs).
+      if (hubPsycho && kit.psychosocial && !hooks.simDrivesPsychosocial) {
+        const entry = kit.palette.find((p) => p.id === slot.id);
+        if (entry?.effects.some((e) => e.kind === "psychosocial.stage")) castLifeStage(hubPsycho);
+        else if (entry?.effects.some((e) => e.kind === "psychosocial.virtue")) {
+          // Refunded after this press is paid (below), so the cap cannot eat it.
+          if (castVirtue(hubPsycho, kit.psychosocial).matched) hubRefund = kit.psychosocial.pairFocusRefund;
+        }
+        else if (slot.kind === "basic") castAddon(hubPsycho);
+        else if (slot.kind === "ultimate") lifeReview(hubPsycho);
+        paintPsychosocial(hubPsycho);
+      }
       const [c1, c2] = CAST_KIND_COLORS[slot.kind];
       burst(c1, c2, slot.kind === "ultimate" ? 90 : slot.kind === "basic" ? 14 : 26);
 
@@ -5884,7 +6107,7 @@ export function setupSkillBar(
           speed: 6.5,
           lifeSec: 2.2,
           wobble: 0.8,
-          ...(slot.id === "pavlov.ucs" ? { dressing: "steak" as const } : {}),
+          ...paletteDressing(slot.id),
           ...(hooks.target ? { target: hooks.target } : { spread: 0.45 }),
           onHit: () => {
             playImpactSfx(slot.id);
@@ -5896,6 +6119,7 @@ export function setupSkillBar(
         // here, the boss in the arena. Its damage ticks on impact.
         projectiles.fire({
           color: ultimateTint(kit.id),
+          ...ultimateDressing(kit.id),
           size: 0.42,
           speed: 8,
           lifeSec: 3,
@@ -5908,15 +6132,17 @@ export function setupSkillBar(
       // The big per-skill magic moments are for skills; the basic attack keeps
       // just the small burst + the throw gesture, or a left-click spam session
       // would strobe rune circles.
-      if (slot.kind !== "basic") skillFx.cast(slot.kind, slot.id);
+      if (slot.kind !== "basic") skillFx.cast(slot.kind, voiceKey);
       // The controller reads this next tick and plays the matching gesture, so
       // a cast moves the BODY as well as the particles: palette (1-5) casts,
       // E and the ult (F) share the second cast clip, R meditates; "basic"
       // takes the palette's OverhandThrow overlay via the animator fallthrough.
       hero.fx.cast = slot.kind;
-      voice.cast(slot.id);
+      hero.fx.focus = hooks.target ?? null;
+      voice.cast(voiceKey);
       playCastSfx(slot.id);
-      player.spendMana(FOCUS_COST[slot.kind]);
+      player.spendMana(slotFocusCost(slot));
+      if (hubRefund > 0) player.restoreMana(hubRefund);
       // A reinforcement kit's E/R are quadrant toggles, not timed self-buffs —
       // the sim pins the live quadrant to the buff bar itself; a 6 s
       // "Contingency" tile beside it would be a lie about a timer.
@@ -5945,9 +6171,11 @@ export function setupSkillBar(
       layout: touch ? "touch" : "bar",
       // The touch cluster's word for the wheel — Skinner's is "Schedules".
       paletteWord: kit.reinforcement ? "Schedules" : undefined,
+      // Erikson's 1 and 2 are a rhythm, not a menu — two direct buttons.
+      paletteInline: kit.psychosocial !== undefined,
       // Same Focus gate as the arena: an empty pool refuses the press (red
       // flash, no cooldown) instead of casting for free.
-      canCast: (slot) => player.mana >= FOCUS_COST[slot.kind],
+      canCast: (slot) => player.mana >= slotFocusCost(slot),
       // Mana is the only reason canCast says no here, so every refusal
       // deserves the "why" popup (arena adds a hero-death guard).
       onRefused: () => showCastWarning("Not enough Focus"),
@@ -6025,7 +6253,7 @@ export function setupSkillBar(
     key,
     label: p.name.replace(" Stage", "").split(" — ")[0] ?? p.name,
     tooltip: `${p.name}. Deals ${p.base} damage.`,
-    icon: `${ICONS}/${slug(p.id)}.webp`,
+    icon: skillIcon(slug(p.id)),
     cooldownMs: 1_500,
     kind: "palette" as const,
   });
@@ -6067,7 +6295,7 @@ export function setupSkillBar(
         eNext === "negative"
           ? `Switch ${kit.defense.name} to Negative — teammates earn a consequence for every ${rf.negativeCleanSeconds} sec spent taking no damage. Currently Positive: every ${rf.positiveDamagePerProc} damage dealt earns one.`
           : `Switch ${kit.defense.name} to Positive — teammates earn a consequence for every ${rf.positiveDamagePerProc} damage they deal. Currently Negative: every ${rf.negativeCleanSeconds} sec without taking damage earns one.`,
-      icon: `${ICONS}/contingency_${eNext}.webp`,
+      icon: skillIcon(`contingency_${eNext}`),
       cooldownMs: kit.defense.cooldownMs,
       kind: "defense",
       freeOfGcd: true,
@@ -6080,7 +6308,7 @@ export function setupSkillBar(
         rNext === "punishment"
           ? `Switch ${kit.chain.name} to Punishment — every proc grants ${Math.round(rf.procMitigation.magnitude * 100)} percent damage reduction for ${rf.procMitigation.durationMs / 1000} sec. Currently Reinforcement: a proc heals its earner.`
           : `Switch ${kit.chain.name} to Reinforcement — every proc heals its earner. Currently Punishment: a proc grants mitigation instead. Either way procs bank Approximations.`,
-      icon: `${ICONS}/consequence_${rNext}.webp`,
+      icon: skillIcon(`consequence_${rNext}`),
       cooldownMs: kit.chain.cooldownMs,
       kind: "chain",
       freeOfGcd: true,
@@ -6089,10 +6317,26 @@ export function setupSkillBar(
     if (rSlotId !== rDef.id && bar.replaceSlot(rSlotId, rDef)) rSlotId = rDef.id;
   };
 
+  function paintPsychosocial(st: PsychosocialHudState): void {
+    const spec = kit.psychosocial;
+    if (!spec) return;
+    lastPsycho = { ...st };
+    const f = psychosocialFaces(spec, st);
+    for (const p of kit.palette) {
+      if (p.effects.some((e) => e.kind === "psychosocial.stage")) bar.setLabel(p.id, f.stage, skillIcon(f.stageIcon));
+      else if (p.effects.some((e) => e.kind === "psychosocial.virtue")) bar.setLabel(p.id, f.virtue, skillIcon(f.virtueIcon));
+    }
+    bar.setLabel(BASIC_ID, f.basic);
+    bar.setAvailable(BASIC_ID, st.addon);
+    bar.setCaption(f.caption);
+  }
+  if (hubPsycho) paintPsychosocial(hubPsycho);
+
   return {
     setToggle: (id, on) => bar.setToggle(id, on),
     lockSlot: (id, ms) => bar.lockSlot(id, ms),
     setOperant: paintOperant,
+    setPsychosocial: paintPsychosocial,
     setTransformed: (on) => {
       if (!mountTransforming || !transformEntry || !transformBaseDef) return false;
       if (on && !transformed) {
@@ -7103,7 +7347,7 @@ function wireVillagePresence(
         speed: 6.5,
         lifeSec: 2.2,
         wobble: 0.8,
-        ...(id === "pavlov.ucs" ? { dressing: "steak" as const } : {}),
+        ...paletteDressing(id),
         spread: 0.45,
       });
     }

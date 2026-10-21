@@ -149,6 +149,27 @@ export interface PaletteEntry {
    */
   requiresBossState?: string;
   /**
+   * Focus this entry costs, when it differs from the flat palette scaffold
+   * (`PALETTE_FOCUS_COST` in shared/fight/costs.ts). Erikson's two keys cost
+   * more and a completed pair refunds (`PsychosocialSpec.pairFocusRefund`), so
+   * correct play nets exactly the scaffold price and wrong play pays extra.
+   */
+  focusCost?: number;
+  /**
+   * A cooldown of this entry's own, on top of the GCD. Absent = the GCD is
+   * the only pacing (the bar draws a 3 s display scaffold). The server already
+   * reads it (server/fight.mjs `cooldownSecondsFor`); the sim enforces it too,
+   * so offline play keeps the same pacing. First user: Ainsworth's
+   * Disorganized, whose team immunity would otherwise run on the GCD.
+   */
+  cooldownMs?: number;
+  /**
+   * Gate: castable only after this many OTHER palette entries were cast
+   * within the window — Ainsworth's Disorganized is contradictory strategies,
+   * so it needs two different styles behind it first.
+   */
+  requiresVariety?: { distinct: number; withinMs: number };
+  /**
    * Bar transform: while this entry's gate is open, it REPLACES the ability
    * with the given id on the action bar instead of occupying a slot of its
    * own. The base may be another palette entry or the kit's BASIC attack —
@@ -289,6 +310,44 @@ export interface ReinforcementSpec {
   shaping: { perApproximation: number };
 }
 
+/**
+ * One row of Erikson's stage chart (*Identity and the Life Cycle*, 1959) — what
+ * the bar shows while this stage is up.
+ */
+export interface PsychosocialStage {
+  /** The crisis, both poles: "Trust vs Mistrust". */
+  crisis: string;
+  /** The syntonic pole alone, for a button face too small for the crisis. */
+  short: string;
+  /** Rough age band, as the chart is usually taught: "0 to 1½" (player-facing, so no dashes). */
+  age: string;
+  /** The basic virtue the stage yields: "Hope". */
+  virtue: string;
+  /** Radius of significant relations — the basic attack's name: "Mother". */
+  relations: string;
+}
+
+/**
+ * Erikson's life-cycle rotation, as data the sim runs — the shape of
+ * `ERIKSON_PSYCHOSOCIAL` in shared/heroes/erikson.ts. On `Hero.psychosocial`,
+ * the same data-not-code pattern as `conditioning` / `reinforcement`; the
+ * state machine itself is shared/fight/psychosocial.ts.
+ */
+export interface PsychosocialSpec {
+  /** The eight stages, in life order. The rotation walks them and loops. */
+  stages: PsychosocialStage[];
+  /** A Virtue cast with no stage armed pays `virtue.base × this`. */
+  unmatchedVirtueMult: number;
+  /** Virtue stacks bank up to this many; Life Review spends them. */
+  maxVirtues: number;
+  /**
+   * Focus returned by a completed pair (key 1 then key 2). Budget-neutral by
+   * construction: the two keys' `focusCost`s minus this equal two scaffold
+   * palette casts — `tools/sim-check.mjs` scenario 8 holds that line.
+   */
+  pairFocusRefund: number;
+}
+
 export interface Beat {
   name: string; // "Id" | "Ego" | "Superego"
   multiplier: number; // 0.8 | 1.0 | 1.5
@@ -354,6 +413,11 @@ export interface Hero {
    * pattern as `conditioning`.
    */
   reinforcement?: ReinforcementSpec;
+  /**
+   * Erikson's stage → virtue rotation, if this hero runs one. Same pattern
+   * again: the sim reads it off the hero.
+   */
+  psychosocial?: PsychosocialSpec;
   /**
    * Empirical standing of the underlying theory, surfaced in-game.
    *

@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 /**
+ * LEGACY: kept to rebuild the heroes it already shipped. New heroes use the
+ * default pipeline, tools/motion-video/README.md (25-bone Mixamo rig) then
+ * tools/ship-hero.mjs.
+ *
  * Sanitize Tripo-retargeted animation clips in a hero .glb, in place on the
  * animation data only (textures/mesh/skin untouched).
  *

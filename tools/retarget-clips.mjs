@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 /**
+ * LEGACY: kept to rebuild the heroes it already shipped. New heroes use the
+ * default pipeline, tools/motion-video/README.md (25-bone Mixamo rig) then
+ * tools/ship-hero.mjs.
+ *
  * Retarget animation clips from one humanoid rig onto another, in WORLD space.
  *
  *   node tools/retarget-clips.mjs source.glb target.glb out.glb \

@@ -12,6 +12,23 @@
 import { randomUUID } from "node:crypto";
 import { logEvent } from "./events.mjs";
 
+/**
+ * Heroes earned by ranked boss clears: id → wins needed (game_state
+ * bosses_defeated, which practice runs never move). Skinner first, in course
+ * order after the starter Pavlov — he has since joined DEFAULT_UNLOCKS in
+ * app.mjs, so his row only matters for an account predating that. Erikson on
+ * the second clear (Frank, 2026-10-18), Ainsworth on the third (2026-10-19).
+ * Admins hold every hero listed here from the start (app.mjs).
+ */
+export const HERO_UNLOCK_WINS = { skinner: 1, erikson: 2, ainsworth: 3 };
+
+/** Every hero `bossesDefeated` ranked clears have earned, in table order. */
+export function earnedHeroUnlocks(bossesDefeated) {
+  return Object.entries(HERO_UNLOCK_WINS)
+    .filter(([, wins]) => bossesDefeated >= wins)
+    .map(([id]) => id);
+}
+
 // Gear slots mirror src/ui/gearPanel.ts SLOTS order (hat → pet).
 export const GEAR_SLOTS = ["hat", "body", "gloves", "pants", "shoes", "pet"];
 
@@ -169,6 +186,37 @@ export function initEconomy(database, apiHelpers) {
     );
     -- Per-day practice-run Imaginz, same day-key reset story. total is the
     -- Imaginz already paid today, clamped at PRACTICE_DAILY_CAP on award.
+    -- Survival (Dream Siege, docs/survival-design.md §6.2). Best wave per
+    -- difficulty, the per-difficulty jackpot pity (misses since the last
+    -- jackpot), and per-day Lucid clears for the anti-farm halving.
+    CREATE TABLE IF NOT EXISTS survival_records (
+      user_id TEXT NOT NULL,
+      difficulty TEXT NOT NULL,
+      best_wave INTEGER NOT NULL DEFAULT 0,
+      clears INTEGER NOT NULL DEFAULT 0,
+      jackpot_misses INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, difficulty)
+    );
+    -- Lifetime Dream Siege totals (achievements, the Hall's Dream Siege board).
+    CREATE TABLE IF NOT EXISTS survival_stats (
+      user_id TEXT PRIMARY KEY,
+      runs INTEGER NOT NULL DEFAULT 0,
+      kills INTEGER NOT NULL DEFAULT 0,
+      damage INTEGER NOT NULL DEFAULT 0,
+      healing INTEGER NOT NULL DEFAULT 0,
+      revives INTEGER NOT NULL DEFAULT 0,
+      recall_right INTEGER NOT NULL DEFAULT 0,
+      jackpots INTEGER NOT NULL DEFAULT 0,
+      best_damage INTEGER NOT NULL DEFAULT 0,
+      best_kills INTEGER NOT NULL DEFAULT 0,
+      flawless INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS survival_daily (
+      user_id TEXT NOT NULL,
+      day_key TEXT NOT NULL,
+      lucid_clears INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, day_key)
+    );
     CREATE TABLE IF NOT EXISTS practice_awards (
       user_id INTEGER NOT NULL,
       day_key TEXT NOT NULL,
@@ -631,12 +679,13 @@ export function settleFight(userId, { win, difficulty, durationMs, dps, healing,
        bosses_defeated = bosses_defeated + ? WHERE user_id = ?`
   ).run(win ? 1 : 0, win ? 1 : 0, userId);
 
-  // Docs 05 hero access: Skinner is granted free on the FIRST boss clear —
-  // classical then operant, in course order, and the starter tank finally
-  // gets his healer. Purely additive; the sweep in app.mjs never removes it.
+  // Docs 05 hero access: heroes earned by boss clears (HERO_UNLOCK_WINS),
+  // read off the counter the UPDATE above just moved. Purely additive; the
+  // sweep in app.mjs never removes one, and backfills accounts that already
+  // had the wins when a hero joined the table.
   if (win) {
     const gsRow = db
-      .prepare("SELECT unlocked_heroes FROM game_state WHERE user_id = ?")
+      .prepare("SELECT unlocked_heroes, bosses_defeated FROM game_state WHERE user_id = ?")
       .get(userId);
     let unlocked;
     try {
@@ -644,13 +693,18 @@ export function settleFight(userId, { win, difficulty, durationMs, dps, healing,
     } catch {
       unlocked = [];
     }
-    if (Array.isArray(unlocked) && !unlocked.includes("skinner")) {
-      unlocked.push("skinner");
-      db.prepare("UPDATE game_state SET unlocked_heroes = ? WHERE user_id = ?").run(
-        JSON.stringify(unlocked),
-        userId
+    if (Array.isArray(unlocked)) {
+      const earned = earnedHeroUnlocks(Number(gsRow?.bosses_defeated ?? 0)).filter(
+        (h) => !unlocked.includes(h)
       );
-      heroUnlocked = "skinner";
+      if (earned.length > 0) {
+        unlocked.push(...earned);
+        db.prepare("UPDATE game_state SET unlocked_heroes = ? WHERE user_id = ?").run(
+          JSON.stringify(unlocked),
+          userId
+        );
+        heroUnlocked = earned[earned.length - 1];
+      }
     }
   }
 
@@ -734,8 +788,8 @@ export function settleFight(userId, { win, difficulty, durationMs, dps, healing,
     xpAwarded,
     ...progression,
     lootBox,
-    // First clear: the account just earned its healer ("skinner"). Absent on
-    // every later report — clients may toast it or ignore it.
+    // The hero this win just earned (HERO_UNLOCK_WINS). Absent on every
+    // other report — the arena announces it.
     ...(heroUnlocked ? { heroUnlocked } : {}),
     // Absent unless the run beat something — the overlay tests for the field
     // rather than for a zero bonus.
@@ -743,6 +797,109 @@ export function settleFight(userId, { win, difficulty, durationMs, dps, healing,
       ? { personalBest: { kinds: personalBests, bonus: award - baseAward } }
       : {}),
   };
+}
+
+// ---- Survival settlement (Dream Siege) ---------------------------------------
+//
+// The run is simulated on the client for now (shared/survival/sim.ts), so this
+// door is client-asserted like the offline fight fallback, and bounded the
+// same way: the claim has to be physically possible, and the jackpot is rolled
+// HERE, never trusted from the client. A server-run session (the planned
+// server/survival.mjs) will call the same payout itself.
+const SURVIVAL = {
+  lucid: { waves: 20, common: 60, jackpot: 1500, chance: 0.04 },
+  deep: { waves: 40, common: 120, jackpot: 3000, chance: 0.06 },
+  terror: { waves: 60, common: 200, jackpot: 5000, chance: 0.08 },
+};
+/** Shortest believable time per wave cleared (a wave is up to 55 s; breathers 6 s). */
+const SURVIVAL_MIN_S_PER_WAVE = 30;
+const SURVIVAL_PITY_STEP = 0.01;
+const SURVIVAL_LUCID_FULL_CLEARS = 5;
+/** The cache a run leaves behind (LOOT_TIERS): a clear by difficulty; a loss that beat a boss, Residue. */
+const SURVIVAL_LOOT_TIER = { lucid: 1, deep: 2, terror: 3 };
+/** Ceilings on a solo client's own numbers (server/survival.mjs caps party hits the same way). */
+const SURVIVAL_DPS_CEIL = 6000;
+const SURVIVAL_HPS_CEIL = 400;
+
+/** A per-player score, clamped to what `durationS` seconds could hold. */
+function boundScore(score, durationS, waves) {
+  const n = (v, max) => Math.max(0, Math.min(max, Math.floor(Number(v) || 0)));
+  const sc = score && typeof score === "object" ? score : {};
+  return {
+    dealt: n(sc.dealt, SURVIVAL_DPS_CEIL * durationS),
+    healed: n(sc.healed, SURVIVAL_HPS_CEIL * durationS),
+    kills: n(sc.kills, 40 * (waves + 1)),
+    downs: n(sc.downs, 1000),
+    revives: n(sc.revives, 1000),
+  };
+}
+
+/**
+ * Pay one player for a Dream Siege run. Exported: a server-run party session
+ * (server/survival.mjs) calls this with its OWN numbers; the solo route below
+ * calls it with a client claim it has bounded first. Returns `{ error }` for a
+ * claim that cannot be true.
+ */
+export function settleSurvival(userId, { difficulty, victory, wavesCleared, durationS, score, recallRight }) {
+  const def = SURVIVAL[difficulty];
+  if (!def) return { error: "difficulty must be lucid | deep | terror." };
+  victory = victory === true;
+  const waves = Math.max(0, Math.min(def.waves, Math.floor(Number(wavesCleared) || 0)));
+  durationS = Number(durationS) || 0;
+  if (durationS < waves * SURVIVAL_MIN_S_PER_WAVE) return { error: "run too short for the waves claimed." };
+  if (victory && waves !== def.waves) return { error: "a victory clears every wave." };
+  const bosses = Math.floor(waves / 5);
+  const uid = String(userId);
+  db.prepare("INSERT OR IGNORE INTO survival_records (user_id, difficulty) VALUES (?, ?)").run(uid, difficulty);
+  const rec = db.prepare("SELECT best_wave, clears, jackpot_misses FROM survival_records WHERE user_id = ? AND difficulty = ?").get(uid, difficulty);
+
+  let award = 0;
+  let jackpot = false;
+  if (victory) {
+    let common = def.common;
+    if (difficulty === "lucid") {
+      const day = arenaDayKey();
+      db.prepare("INSERT OR IGNORE INTO survival_daily (user_id, day_key) VALUES (?, ?)").run(uid, day);
+      const today = Number(db.prepare("SELECT lucid_clears FROM survival_daily WHERE user_id = ? AND day_key = ?").get(uid, day).lucid_clears);
+      if (today >= SURVIVAL_LUCID_FULL_CLEARS) common = Math.round(common / 2);
+      db.prepare("UPDATE survival_daily SET lucid_clears = lucid_clears + 1 WHERE user_id = ? AND day_key = ?").run(uid, day);
+    }
+    jackpot = Math.random() < def.chance + Number(rec.jackpot_misses) * SURVIVAL_PITY_STEP;
+    award = common + (jackpot ? def.jackpot : 0);
+    db.prepare("UPDATE survival_records SET clears = clears + 1, jackpot_misses = ? WHERE user_id = ? AND difficulty = ?")
+      .run(jackpot ? 0 : Number(rec.jackpot_misses) + 1, uid, difficulty);
+  } else {
+    // Consolation: 20 % of the common drop, scaled by the bosses beaten.
+    award = Math.round(0.2 * def.common * (bosses / (def.waves / 5)));
+  }
+  if (waves > Number(rec.best_wave)) {
+    db.prepare("UPDATE survival_records SET best_wave = ? WHERE user_id = ? AND difficulty = ?").run(waves, uid, difficulty);
+  }
+  if (award > 0) creditImaginz(userId, award);
+  const sc = boundScore(score, durationS, waves);
+  const recall = Math.max(0, Math.min(bosses + 1, Math.floor(Number(recallRight) || 0)));
+  db.prepare("INSERT OR IGNORE INTO survival_stats (user_id) VALUES (?)").run(uid);
+  db.prepare(
+    `UPDATE survival_stats SET runs = runs + 1, kills = kills + ?, damage = damage + ?, healing = healing + ?,
+       revives = revives + ?, recall_right = recall_right + ?, jackpots = jackpots + ?,
+       best_damage = MAX(best_damage, ?), best_kills = MAX(best_kills, ?), flawless = flawless + ?
+     WHERE user_id = ?`
+  ).run(sc.kills, sc.dealt, sc.healed, sc.revives, recall, jackpot ? 1 : 0, sc.dealt, sc.kills, victory && sc.downs === 0 ? 1 : 0, uid);
+  const tier = victory ? SURVIVAL_LOOT_TIER[difficulty] : bosses >= 1 ? 0 : null;
+  const lootBox = tier === null ? null : createLootBox(userId, tier, `survival:${difficulty}:${victory ? "win" : "loss"}`);
+  logEvent("survival.settle", userId, { difficulty, victory, waves, durationS: Math.round(durationS), award, jackpot, dealt: sc.dealt, kills: sc.kills });
+  return {
+    awarded: award, jackpot, lootBox,
+    bestWave: Math.max(waves, Number(rec.best_wave)), newBest: waves > Number(rec.best_wave),
+    balance: balanceFor(userId),
+  };
+}
+
+function handleSurvivalSettle(res, userId, payload) {
+  const { send } = helpers;
+  const r = settleSurvival(userId, payload ?? {});
+  if (r.error) return send(res, 400, { error: r.error });
+  return send(res, 200, r);
 }
 
 async function handleFightResult(res, userId, payload) {
@@ -1045,6 +1202,7 @@ export async function handleEconomy(req, res, url, userId) {
   if (route === "POST /api/pet/shards/convert") return handleShardConvert(res, userId);
   if (route === "POST /api/loot/open") return handleLootOpen(res, userId, await readBody(req));
   if (route === "POST /api/fight/result") return handleFightResult(res, userId, await readBody(req));
+  if (route === "POST /api/survival/settle") return handleSurvivalSettle(res, userId, await readBody(req));
   if (route === "GET /api/rankings") return handleRankings(res, userId);
   if (route === "GET /api/arena/status") return handleArenaStatus(res, userId);
   if (route === "POST /api/arena/enter") return handleArenaEnter(res, userId);

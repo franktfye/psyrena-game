@@ -59,7 +59,7 @@ export const ROSTER: { id: string; name: string; epithet: string; role: string; 
   { id: "kohlberg", name: "Kohlberg", epithet: "The Arbiter", role: "DPS", img: "kohlberg_sketch.webp" },
   { id: "bronfenbrenner", name: "Bronfenbrenner", epithet: "The Ecologist", role: "Support", img: "bronfenbrenner_sketch.webp" },
   { id: "vygotsky", name: "Vygotsky", epithet: "The Scaffolder", role: "Support", img: "vygotsky_sketch.webp" },
-  { id: "erikson", name: "Erikson", epithet: "The Crisis-Walker", role: "Support", img: "erikson_sketch.webp" },
+  { id: "erikson", name: "Erikson", epithet: "The Life Cycle", role: "DPS", img: "erikson_sketch.webp" },
   { id: "piaget", name: "Piaget", epithet: "The Constructor", role: "Tank", img: "piaget_sketch.webp" },
   { id: "maslow", name: "Maslow", epithet: "The Provider", role: "Healer", img: "maslow_sketch.webp" },
   { id: "seligman", name: "Seligman", epithet: "The Optimist", role: "Healer", img: "seligman_sketch.webp" },
@@ -84,6 +84,8 @@ const CONCEPT_FULL_BODY: Record<string, string> = {
   freud: "freud_concept_full.webp",
   pavlov: "pavlov_concept_full.webp",
   skinner: "skinner_concept_full.webp",
+  erikson: "erikson_concept_full.webp",
+  ainsworth: "ainsworth_concept_full.webp",
 };
 
 /** WoW-class-style accent color per role, used on role labels in the picker. */

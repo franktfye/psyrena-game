@@ -100,7 +100,7 @@ export function initFight(database, apiHelpers) {
  * field economy.mjs already calls "server-derived, never a client-supplied
  * field".
  */
-function loadoutFor(userId, heroId, petId) {
+export function loadoutFor(userId, heroId, petId) {
   try {
     const gear = {};
     for (const r of db
@@ -255,7 +255,7 @@ function beginFight(userId, body) {
     });
   }
 
-  const fight = BossFight.forParty(NIGHTMARE_STANDARD, actorSpecs, hooksInto(events), {
+  const fight = BossFight.forParty(NIGHTMARE_STANDARD, actorSpecs, hooksInto(events, members), {
     hpMult: DIFFICULTY[difficulty].hpMult,
     dmgMult: DIFFICULTY[difficulty].dmgMult,
   });
@@ -315,7 +315,7 @@ function disposeSession(key) {
  * machine. Actor-addressed events carry `who` so each client can tell "me"
  * from "my teammate".
  */
-function hooksInto(events) {
+function hooksInto(events, members) {
   const push = (e) => {
     // A stalled or hostile client must not let the buffer grow without bound.
     if (events.length < 600) events.push(e);
@@ -335,11 +335,21 @@ function hooksInto(events) {
     dotTick: (label, amount) => push({ e: "dot", label, amount }),
     playerBuff: (name, durationMs, kind, icon, id, desc, who) =>
       push({ e: "buff", name, durationMs, kind, icon, id, desc, who }),
-    gainFocus: (n, who) => push({ e: "focus", n, who }),
+    // A refund is server state, not just a float: the member's pool IS the
+    // Focus the intent check reads. Pushing only the event (as before) showed
+    // the client a refund the next state frame took back — Pavlov's pairing
+    // Focus never actually arrived in a server fight.
+    gainFocus: (n, who) => {
+      for (const m of members.values()) {
+        if (m.actorId === who) m.focus = Math.min(FOCUS.max, m.focus + n);
+      }
+      push({ e: "focus", n, who });
+    },
     defenseProc: (name, who) => push({ e: "proc", name, who }),
     lockPaletteSlot: (paletteIndex, ms, who) => push({ e: "lock", paletteIndex, ms, who }),
     conditioningChanged: (state, who) => push({ e: "conditioning", state, who }),
     operantChanged: (state, who) => push({ e: "operant", state, who }),
+    psychosocialChanged: (state, who) => push({ e: "psychosocial", state, who }),
     playerHitReaction: (who) => push({ e: "flinch", who }),
     sfxEvent: (name, who) => push({ e: "sfx", name, who }),
     fightEnd: (stats) => push({ e: "end", stats }),
@@ -408,8 +418,16 @@ function applyIntent(session, member, body) {
   const readyAt = member.cooldowns.get(slotId) ?? 0;
   if (session.simT < readyAt - TIMER_GRACE_S) return { ok: false, why: "cooling down" };
 
-  const cost = focusCostFor(hero, kind);
+  const cost = focusCostFor(hero, kind, paletteIndex);
   if (member.focus < cost) return { ok: false, why: "not enough Focus" };
+  // Paid BEFORE the cast, so a refund the cast triggers (gainFocus — Erikson's
+  // pair, Pavlov's pairing) lands on the spent pool and is never eaten by the
+  // cap. A refusal below hands the cost back.
+  member.focus -= cost;
+  const refuse = (why) => {
+    member.focus = Math.min(FOCUS.max, member.focus + cost);
+    return { ok: false, why };
+  };
 
   // The beat clock is server-side now: which multiplier a cast lands on is not
   // something a client gets to choose.
@@ -425,19 +443,19 @@ function applyIntent(session, member, body) {
         : kind === "palette"
           ? fight.castPaletteAs(who, paletteIndex, beat)
           : fight.castChainAs(who, beat);
-    if (!hit) return { ok: false, why: "refused" };
+    if (!hit) return refuse("refused");
     crit = !!hit.crit;
     dealt = fight.landHitAs(who, hit);
   } else if (kind === "defense") {
     fight.castDefenseAs(who);
   } else if (kind === "ultimate") {
     const total = fight.castUltimateAs(who);
-    if (total <= 0) return { ok: false, why: "no Marks" };
+    if (total <= 0) return refuse("no Marks");
     fight.landUltimateAs(who, total);
     dealt = total;
   }
 
-  member.focus = Math.max(0, member.focus - cost);
+  member.focus = Math.max(0, member.focus);
   // Anchored to whichever is later, the schedule or now — see TIMER_GRACE_S.
   if (onGcd) member.gcdUntil = Math.max(session.simT, member.gcdUntil) + GCD_MS / 1000;
   const cd = cooldownSecondsFor(hero, kind, paletteIndex);

@@ -146,12 +146,13 @@ export function openHallPanel(profile: Profile): void {
 
   const close = el("button", { class: "close", type: "button", "aria-label": "Close" }, "✕");
 
-  type TabKey = "ladder" | "global" | "clears" | "levels" | "heroes";
+  type TabKey = "ladder" | "global" | "clears" | "levels" | "siege" | "heroes";
   const TABS: { key: TabKey; label: string }[] = [
     { key: "ladder", label: "Ladder" },
     { key: "global", label: "Global" },
     { key: "clears", label: "Team Records" },
     { key: "levels", label: "Solo Records" },
+    { key: "siege", label: "Dream Siege" },
     { key: "heroes", label: "My Heroes" },
   ];
   let active: TabKey = "ladder";
@@ -290,6 +291,35 @@ export function openHallPanel(profile: Profile): void {
           )
         ),
         el("div", { class: "mine" }, `Your rank: ${rankLabel(b.own.rank)} — ${fmtMs(b.own.ms)} — ${b.own.difficulty}`)
+      );
+      return;
+    }
+    if (key === "siege") {
+      const b = boards.survival;
+      const night = (d: string | null) => (d === "terror" ? "Night Terror" : d === "deep" ? "Deep Sleep" : "Lucid Dream");
+      const depth = (r: { difficulty: string | null; wave: number; cleared: boolean }) =>
+        r.cleared ? `${night(r.difficulty)} · cleared` : `${night(r.difficulty)} · wave ${r.wave}`;
+      if (b.top.length === 0) {
+        pane.replaceChildren(el("div", { class: "empty" }, "No one has survived the fog yet — be the first."));
+        return;
+      }
+      pane.replaceChildren(
+        ...b.top.map((row) =>
+          boardRow(
+            `#${row.rank}`,
+            row.username,
+            row.username.toLowerCase() === meName,
+            depth(row),
+            `${row.bestDamage.toLocaleString()} dmg`
+          )
+        ),
+        el(
+          "div",
+          { class: "mine" },
+          b.own.rank === null
+            ? "Your rank: — enter the Dream Siege at the pailou gate"
+            : `Your rank: #${b.own.rank} — ${depth(b.own)} — best ${b.own.bestDamage.toLocaleString()} dmg — ${b.own.kills.toLocaleString()} kills`
+        )
       );
       return;
     }

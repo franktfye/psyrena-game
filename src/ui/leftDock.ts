@@ -89,9 +89,9 @@ const CSS = `
    buttons are village/practice furniture — in the arena battlefield they all
    hide and only Exit Battlefield (plus the fullscreen util) remains. The
    default hides Exit everywhere else, so the village keeps its usual dock. */
-body[data-scene="arena"] #left-dock .dock-fn { display: none; }
+body[data-scene="arena"] #left-dock .dock-fn, body[data-scene="kowloon"] #left-dock .dock-fn { display: none; }
 #left-dock .dock-exit { display: none; }
-body[data-scene="arena"] #left-dock .dock-exit { display: block; }
+body[data-scene="arena"] #left-dock .dock-exit, body[data-scene="kowloon"] #left-dock .dock-exit { display: block; }
 `;
 
 /** Gap between the player frame's bottom edge and the first dock button. */
@@ -279,6 +279,31 @@ export function mountLeftDock(profile: Profile): void {
   queueBtn.addEventListener("pointercancel", () => (queueBtn.style.transform = "scale(1)"));
   dock.append(queueBtn);
 
+  // Dream Siege — survival mode (docs/survival-design.md). Same verb as the
+  // village's pailou portal: the difficulty picker, then Old Kowloon.
+  const survivalBtn = el("button", {
+    class: "dock-btn dock-fn",
+    type: "button",
+    title: "Dream Siege",
+    "aria-label": "Dream Siege",
+    style: `background-image:url("/assets/ui/gear/survival.webp")`,
+  });
+  // Lazy: the picker and run state are survival code, not boot (CLAUDE.md rule 3).
+  onAnyTap(survivalBtn, () => {
+    void Promise.all([import("../survival/hud"), import("../survival/pending")]).then(([hud, pending]) => {
+      hud.openSurvivalPicker((d) => {
+        pending.setPendingRun(d);
+        const psy = (window as unknown as { psyrena?: { go?: (id: string) => Promise<void> } }).psyrena;
+        void psy?.go?.("kowloon");
+      });
+    });
+  });
+  survivalBtn.addEventListener("pointerdown", () => (survivalBtn.style.transform = "scale(.94)"));
+  survivalBtn.addEventListener("pointerup", () => (survivalBtn.style.transform = "scale(1)"));
+  survivalBtn.addEventListener("pointerleave", () => (survivalBtn.style.transform = "scale(1)"));
+  survivalBtn.addEventListener("pointercancel", () => (survivalBtn.style.transform = "scale(1)"));
+  dock.append(survivalBtn);
+
   // Switch Character — back to the hero picker via a plain reload: the session
   // is an HttpOnly cookie, so the reload lands on GET /api/me, skips the login
   // form and opens straight onto character select (authFlow.ts). A reload is
@@ -352,7 +377,7 @@ export function mountLeftDock(profile: Profile): void {
 
   // Fit it under the player frame, and keep it fitted: rotate the phone, resize
   // the window, or gain a buff row and the frame's bottom edge moves.
-  const cells = items.length + 3; // facility buttons + queue + switch + fullscreen
+  const cells = items.length + 4; // facility buttons + queue + survival + switch + fullscreen
   const fit = (): void => relayout(dock, cells);
   fit();
   window.addEventListener("resize", fit);

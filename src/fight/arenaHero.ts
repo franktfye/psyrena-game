@@ -28,6 +28,7 @@ import "@babylonjs/loaders/glTF/2.0";
 
 import { heroHeightM } from "@shared/combat";
 import { trackLoad } from "../core/loadProgress";
+import { MODELED_HEROES } from "./heroModels";
 import { detectControlScheme, isTypingInField, uiScale } from "../ui/inputMode";
 import { TouchStick, STICK_RUN_AT } from "../ui/touchStick";
 
@@ -48,7 +49,12 @@ export interface ArenaHero {
   update(dt: number): void;
   /** Snap facing onto the boss (auto-aim is the design — players never aim). */
   faceTarget(point: Vector3): void;
-  cast(kind: ArenaCastKind): void;
+  /**
+   * Play the cast gesture. `slotId` lets a palette cast pick its own clip:
+   * a rig that ships `cast_<slug>` (Ainsworth's `cast_secure` …) plays that
+   * one; every other rig keeps the shared throw.
+   */
+  cast(kind: ArenaCastKind, slotId?: string): void;
   hit(): void;
   /**
    * External locomotion hint for network-driven instances (remote teammates):
@@ -71,6 +77,13 @@ const RUN_SPEED = 6.2;
 /** How fast the body yaws toward where it's going / where it casts. */
 const TURN_RATE = 14;
 /**
+ * Combat stance, as in the hub controller (villageHub.ts COMBAT_FACE_S): after
+ * a cast the body keeps facing its target; sideways and back walk (back is the
+ * walk clip in reverse, a little slower) and only a step toward it may run.
+ */
+const COMBAT_FACE_S = 3;
+const BACKPEDAL_MULT = 0.85;
+/**
  * Jump: same ~0.75 m arcade hop as the village and the practice pit
  * (villageHub.ts JUMP_SPEED/JUMP_GRAVITY) — the arena was the one scene
  * missing it, and a hero who can hop in the pit must hop in the fight.
@@ -78,8 +91,23 @@ const TURN_RATE = 14;
 const JUMP_SPEED = 4.6;
 const JUMP_GRAVITY = 14;
 
-/** Hero ids with a shipped /assets/heroes/<id>.glb; anyone else borrows Freud's rig. */
-export const MODELED_HEROES = new Set(["freud", "pavlov", "skinner"]);
+export { MODELED_HEROES };
+
+/**
+ * Hero ids with a skill icon set under /assets/ui/skills/<id>/. Anyone else's
+ * bar shows text faces — a missing set would be one 404 per button, and a
+ * blank tile reads worse than a label.
+ */
+export const SKILL_ICON_HEROES = new Set(["freud", "pavlov", "skinner", "erikson", "ainsworth"]);
+
+/**
+ * The threat stance's bar key: "4" (Pavlov's one palette button leaves 2-5
+ * free), unless the palette itself fills 1-4 — Ainsworth's four styles —
+ * in which case the next number. Shared by the arena, hub and pit bars.
+ */
+export function stanceKey(paletteButtons: number): string {
+  return paletteButtons >= 4 ? String(paletteButtons + 1) : "4";
+}
 
 export interface ArenaHeroOptions {
   /**
@@ -163,6 +191,13 @@ export async function loadArenaHero(
   // only — deliberately not "ult", which would silently repoint Freud's F (his
   // glb carries a clip literally named `ult`) off the cast_e it is tuned for.
   const castF = find("cast_f");
+  // Per-style palette clips (`cast_<slug>`), exact names only, so the E/R/F
+  // clips and anything merely containing "cast" never land here.
+  const styleClips = new Map<string, AnimationGroup>();
+  for (const g of clips) {
+    const n = g.name.toLowerCase();
+    if (n.startsWith("cast_") && !["cast_e", "cast_r", "cast_f"].includes(n)) styleClips.set(n, g);
+  }
   const hitClip = find("hit", "knockback");
   const deathClip = find("death", "die");
   // Jump pair — same lookup as the hub animator. Some rigs ship only the
@@ -192,6 +227,12 @@ export async function loadArenaHero(
   loop(idle, 1);
   loop(walk, 0);
   loop(run, 0);
+  // Backpedal: a copy of the walk played in reverse, so the forward gait never jumps phase.
+  const walkBack = walk ? walk.clone(`${walk.name}_back`, (t) => t) : null;
+  if (walkBack) {
+    walkBack.start(true, -1);
+    walkBack.setWeightForAllAnimatables(0);
+  }
 
   /** Seconds a group runs at speedRatio 1 — Babylon's glTF importer is 60 fps. */
   const clipSeconds = (g: AnimationGroup): number => (g.to - g.from) / 60;
@@ -212,10 +253,11 @@ export async function loadArenaHero(
   let wIdle = 1;
   let wWalk = 0;
   let wRun = 0;
+  let wBack = 0;
   let takenOver = false;
   const fullBody = (g: AnimationGroup | null, speedRatio: number): void => {
     if (!g) return;
-    for (const other of [throwClip, castE, castR, castF, hitClip, jumpStart, jumpLand]) {
+    for (const other of [throwClip, castE, castR, castF, hitClip, jumpStart, jumpLand, ...styleClips.values()]) {
       if (other && other !== g) {
         other.stop();
         other.setWeightForAllAnimatables(0);
@@ -229,7 +271,7 @@ export async function loadArenaHero(
     // interrupting cast un-flagged and blended against full-weight idle.
     takenOver = true;
   };
-  for (const g of [throwClip, castE, castR, castF, hitClip, jumpStart, jumpLand]) {
+  for (const g of [throwClip, castE, castR, castF, hitClip, jumpStart, jumpLand, ...styleClips.values()]) {
     g?.onAnimationGroupEndObservable.add(() => {
       takenOver = false;
       g.setWeightForAllAnimatables(0);
@@ -343,6 +385,9 @@ export async function loadArenaHero(
   }
 
   let targetYaw: number | null = null;
+  /** Combat stance: the point last cast at, and seconds left facing it. */
+  let lockPoint: Vector3 | null = null;
+  let lockT = 0;
   let dead = false;
   /** Locomotion speed fed by driveSpeed() for network-driven instances. */
   let drivenSpeed = 0;
@@ -376,16 +421,38 @@ export async function loadArenaHero(
         tilt = axes.magnitude;
       }
       const moving = moveVec.lengthSquared() > 0;
+      // Combat stance: a unit vector at the last cast target, while it lasts.
+      lockT -= dt;
+      let face: { x: number; z: number } | null = null;
+      if (lockPoint && lockT > 0) {
+        const fx = lockPoint.x - wrapper.position.x;
+        const fz = lockPoint.z - wrapper.position.z;
+        const fl = Math.hypot(fx, fz);
+        if (fl > 0.5) face = { x: fx / fl, z: fz / fl };
+      }
+      let backward = false;
+      if (moving && face) {
+        // Where this input would walk (camera-relative, same math as below).
+        camera.target.subtractToRef(camera.position, camFwd);
+        camFwd.y = 0;
+        camFwd.normalize();
+        const mx = moveVec.x, mz = moveVec.z, ml = Math.hypot(mx, mz);
+        const wx0 = (camFwd.x * mz + camFwd.z * mx) / ml;
+        const wz0 = (camFwd.z * mz - camFwd.x * mx) / ml;
+        const along = wx0 * face.x + wz0 * face.z;
+        if (along < 0.5) sprint = false;
+        backward = along < -0.35;
+      }
       // Analog speed curve, same shape as the hub: tilt scales across the walk
       // range below the sprint threshold, then ramps walk → run over the
       // remaining travel. Keyboard input (tilt 1) lands exactly on WALK / RUN.
-      const speed = !moving
+      const speed = (backward ? BACKPEDAL_MULT : 1) * (!moving
         ? 0
         : sprint
           ? WALK_SPEED +
             (RUN_SPEED - WALK_SPEED) *
               Math.min(1, Math.max(0, tilt - STICK_RUN_AT) / (1 - STICK_RUN_AT))
-          : WALK_SPEED * Math.min(1, tilt / STICK_RUN_AT);
+          : WALK_SPEED * Math.min(1, tilt / STICK_RUN_AT));
 
       if (moving) {
         moveVec.normalize();
@@ -403,6 +470,7 @@ export async function loadArenaHero(
         terrain.clamp(wrapper.position);
         targetYaw = Math.atan2(wx, wz) + Math.PI;
       }
+      if (face) targetYaw = Math.atan2(face.x, face.z) + Math.PI;
       // ---- Jump — same fixed-gravity hop as the hub controller, stacked on
       // the local floor height instead of the village's flat y=0.
       if (jumpQueued) {
@@ -456,18 +524,28 @@ export async function loadArenaHero(
           tIdle = 0;
         }
       }
+      let tBack = 0;
+      if (backward && walkBack) {
+        tBack = tWalk + tRun;
+        tWalk = 0;
+        tRun = 0;
+      }
       if (takenOver) {
         tIdle = 0;
         tWalk = 0;
         tRun = 0;
+        tBack = 0;
       }
       const k = Math.min(1, dt * 9);
       wIdle += (tIdle - wIdle) * k;
       wWalk += (tWalk - wWalk) * k;
       wRun += (tRun - wRun) * k;
+      wBack += (tBack - wBack) * k;
       idle?.setWeightForAllAnimatables(wIdle);
       walk?.setWeightForAllAnimatables(wWalk);
       run?.setWeightForAllAnimatables(wRun);
+      walkBack?.setWeightForAllAnimatables(wBack);
+      if (walkBack) walkBack.speedRatio = -Math.min(1.9, Math.max(0.8, blendSpeed / 1.4));
       if (walk) walk.speedRatio = Math.min(1.9, Math.max(0.8, blendSpeed / 1.4));
       if (run) run.speedRatio = Math.min(1.5, Math.max(0.8, blendSpeed / 4.5));
     },
@@ -475,10 +553,17 @@ export async function loadArenaHero(
     faceTarget(point) {
       if (dead) return;
       targetYaw = Math.atan2(point.x - wrapper.position.x, point.z - wrapper.position.z) + Math.PI;
+      lockPoint = point.clone();
+      lockT = COMBAT_FACE_S;
     },
 
-    cast(kind) {
+    cast(kind, slotId) {
       if (dead) return;
+      const style =
+        kind === "palette" && slotId
+          ? styleClips.get(`cast_${(slotId.split(".").pop() ?? slotId).split(":")[0]!.replace(/-/g, "_")}`)
+          : undefined;
+      if (style) return fullBody(style, readable(style, 1.0));
       if (kind === "ultimate" && castF) return fullBody(castF, readable(castF, 1.0));
       if (kind === "ultimate" && castE) return fullBody(castE, readable(castE, 0.9));
       if (kind === "chain" && castR) return fullBody(castR, readable(castR, 0.6));

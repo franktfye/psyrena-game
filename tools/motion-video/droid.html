@@ -1,0 +1,251 @@
+<!doctype html>
+<!--
+  Motion-reference stage for tools/motion-video/render.mjs.
+
+  A Mixamo-rigged mannequin ("droid", three.js's X Bot) on a plain floor, a
+  fixed camera, and a deterministic clock: render.mjs calls renderAt(t) per
+  frame and reads the canvas back, so the video is frame-exact no matter how
+  slowly software GL renders. The output is the INPUT to Motion2MixamoRig on
+  gpu-box, so the stage is tuned for pose estimation, not looks: full body
+  always in frame, flat even light, no motion blur, a figure that contrasts
+  with the background.
+-->
+<html>
+<head>
+<meta charset="utf-8" />
+<style>html,body{margin:0;background:#000;overflow:hidden}canvas{display:block}</style>
+<script type="importmap">
+{ "imports": {
+  "three": "/three/build/three.module.js",
+  "three/addons/": "/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+
+const DEG = Math.PI / 180;
+let renderer, scene, camera, mixer, droid, bones, spec, baseAction;
+
+/**
+ * Joint limits for gesture offsets, degrees, per local axis [min, max].
+ * Offsets are applied in each bone's LOCAL frame on top of the base clip
+ * (calibrated on X Bot: see tools/motion-video/README.md). Anything outside
+ * the range is clamped and reported, so a typo in a gesture spec cannot
+ * produce a broken elbow in the reference video.
+ */
+const LIMITS = {
+  // Hips carries the WHOLE body's orientation (a fall lays it flat), so its
+  // range is global, not anatomical; the spine below enforces the anatomy.
+  Hips: { x: [-100, 100], y: [-180, 180], z: [-90, 90] },
+  Spine: { x: [-30, 45], y: [-30, 30], z: [-25, 25] },
+  Spine1: { x: [-30, 45], y: [-30, 30], z: [-25, 25] },
+  Spine2: { x: [-30, 45], y: [-30, 30], z: [-25, 25] },
+  Neck: { x: [-40, 50], y: [-60, 60], z: [-30, 30] },
+  Head: { x: [-40, 50], y: [-70, 70], z: [-35, 35] },
+  LeftShoulder: { x: [-20, 20], y: [-15, 15], z: [-30, 30] },
+  RightShoulder: { x: [-20, 20], y: [-15, 15], z: [-30, 30] },
+  // Axes are the CHARACTER frame (+X the figure's left, +Y up, +Z forward),
+  // measured from the T-pose. Shoulder: x twists along the arm, y swings
+  // forward/back, z lowers/raises. Left is the mirror of right.
+  RightArm: { x: [-100, 100], y: [-60, 135], z: [-100, 95] },
+  LeftArm: { x: [-100, 100], y: [-135, 60], z: [-95, 100] },
+  // Elbow is a hinge on y: right flexes +, left flexes −. x/z stay ~0.
+  RightForeArm: { x: [-15, 15], y: [0, 150], z: [-10, 10] },
+  LeftForeArm: { x: [-15, 15], y: [-150, 0], z: [-10, 10] },
+  LeftHand: { x: [-90, 90], y: [-40, 40], z: [-80, 80] },
+  RightHand: { x: [-90, 90], y: [-40, 40], z: [-80, 80] },
+  // Hip: −x lifts the leg forward. Knee is a hinge on +x.
+  LeftUpLeg: { x: [-120, 45], y: [-45, 45], z: [-45, 45] },
+  RightUpLeg: { x: [-120, 45], y: [-45, 45], z: [-45, 45] },
+  LeftLeg: { x: [0, 150], y: [-5, 5], z: [-5, 5] },
+  RightLeg: { x: [0, 150], y: [-5, 5], z: [-5, 5] },
+  LeftFoot: { x: [-45, 45], y: [-20, 20], z: [-25, 25] },
+  RightFoot: { x: [-45, 45], y: [-20, 20], z: [-25, 25] },
+};
+const clampLog = [];
+
+const ease = (u) => 0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, Math.max(0, u)));
+
+/**
+ * Pose for one joint at time t: [x, y, z] degrees FROM THE T-POSE REST, eased
+ * between keys and clamped, plus w = blend weight against the base clip
+ * (key = [t, [x,y,z], w?], w defaults to 1). w ramps let a gesture ease in
+ * from the idle mocap and back out without a snap.
+ */
+function offsetAt(joint, keys, t) {
+  let a = keys[0], b = keys[keys.length - 1];
+  if (t <= a[0]) b = a;
+  else if (t >= b[0]) a = b;
+  else for (let i = 0; i < keys.length - 1; i++) if (t >= keys[i][0] && t <= keys[i + 1][0]) { a = keys[i]; b = keys[i + 1]; break; }
+  const lin = b[0] === a[0] ? 0 : Math.min(1, Math.max(0, (t - a[0]) / (b[0] - a[0])));
+  // "linear" for dense, per-frame keys (generated curves); the default cosine
+  // ease suits sparse hand-placed keys but would stall at every dense key.
+  const u = spec.interp === "linear" ? lin : ease(lin);
+  const lim = LIMITS[joint];
+  const wa = a[2] ?? 1, wb = b[2] ?? 1;
+  const w = wa + (wb - wa) * u;
+  const xyz = ["x", "y", "z"].map((ax, i) => {
+    const v = a[1][i] + (b[1][i] - a[1][i]) * u;
+    if (!lim) return v;
+    const c = Math.min(lim[ax][1], Math.max(lim[ax][0], v));
+    if (c !== v && clampLog.length < 50) clampLog.push(`${joint}.${ax} ${v.toFixed(0)}→${c}`);
+    return c;
+  });
+  return [...xyz, w];
+}
+
+const offQ = new THREE.Quaternion(), offE = new THREE.Euler(), poseQ = new THREE.Quaternion(), invQ = new THREE.Quaternion();
+
+/**
+ * Paint the mannequin as a clothed person. m2mr's person check and GVHMR's
+ * tracker run YOLOv8x, which scores the bare pink X Bot at 0.10–0.25 "person"
+ * (it needs 0.5). Skin, hair, shirt, trousers and shoes are assigned by region
+ * of the BIND pose (T-pose) position, so the colours ride the bones as the
+ * droid moves. One shared material replaces X Bot's body + joint materials.
+ */
+function dress(root) {
+  const box = new THREE.Box3();
+  root.traverse((o) => { if (o.isSkinnedMesh) { o.geometry.computeBoundingBox(); box.union(o.geometry.boundingBox); } });
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0 });
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uMin = { value: box.min };
+    sh.uniforms.uMax = { value: box.max };
+    sh.vertexShader = "varying vec3 vRest;\n" + sh.vertexShader.replace(
+      "#include <begin_vertex>", "#include <begin_vertex>\n  vRest = position;");
+    sh.fragmentShader = "uniform vec3 uMin; uniform vec3 uMax; varying vec3 vRest;\n" + sh.fragmentShader.replace(
+      "#include <color_fragment>", `#include <color_fragment>
+  vec3 n = (vRest - uMin) / (uMax - uMin);          // 0..1 in the T-pose box
+  float h = n.y, u = abs(n.x - 0.5) * 2.0, front = n.z;
+  vec3 skin = vec3(0.78, 0.58, 0.47), hair = vec3(0.16, 0.11, 0.08);
+  vec3 shirt = vec3(0.23, 0.36, 0.55), pants = vec3(0.16, 0.17, 0.20), shoe = vec3(0.06);
+  vec3 c = shirt;
+  if (h < 0.045) c = shoe;
+  else if (h < 0.55) c = pants;
+  else if (u > 0.80) c = skin;                       // hands, past the cuffs
+  else if (h > 0.855) c = (h > 0.955 || (h > 0.9 && front < 0.45)) ? hair : skin;
+  diffuseColor.rgb = c;`);
+  };
+  root.traverse((o) => { if (o.isSkinnedMesh) o.material = mat; });
+}
+
+window.setup = async (s) => {
+  spec = s;
+  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(1);
+  renderer.setSize(s.width, s.height);
+  renderer.shadowMap.enabled = true;
+  document.body.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(s.background ?? "#cfd3d8");
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f96, 2.2));
+  const key = new THREE.DirectionalLight(0xffffff, 1.6);
+  key.position.set(2, 5, 4);
+  key.castShadow = true;
+  key.shadow.mapSize.set(1024, 1024);
+  Object.assign(key.shadow.camera, { left: -2, right: 2, top: 3, bottom: -1 });
+  scene.add(key);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshStandardMaterial({ color: s.floor ?? "#b8bcc2" }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  scene.add(floor);
+
+  const gltf = await new GLTFLoader().loadAsync("/droid.glb");
+  droid = gltf.scene;
+  droid.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+  if (s.look === "clothed") dress(droid);
+  droid.rotation.y = (s.yaw ?? 0) * DEG; // every figure faces +Z (the camera's side)
+  scene.add(droid);
+  bones = {};
+  droid.traverse((o) => { if (o.isBone) bones[o.name.replace(/^mixamorig:?/, "")] = o; });
+
+  mixer = new THREE.AnimationMixer(droid);
+  const clips = Object.fromEntries(gltf.animations.map((c) => [c.name.toLowerCase(), c]));
+  // Rest = the T-pose. Gesture keys are measured from it, so a model whose
+  // bind pose is not a T-pose (Soldier) is posed by its TPose clip first.
+  if (clips.tpose) {
+    const a = mixer.clipAction(clips.tpose).play();
+    mixer.setTime(0);
+    a.stop();
+  }
+  for (const b of Object.values(bones)) b.userData.rest = b.quaternion.clone();
+  // Each bone's WORLD rotation at rest, with the figure already turned to face
+  // +Z. Keys are authored in this character frame (+X = the figure's left,
+  // +Y up, +Z forward) and converted per bone, so one gesture spec drives any
+  // Mixamo figure regardless of how its exporter oriented the bone axes.
+  droid.updateMatrixWorld(true);
+  for (const b of Object.values(bones)) b.userData.restWorld = b.getWorldQuaternion(new THREE.Quaternion());
+  // Normalise to 1.8 m, soles on the floor.
+  droid.updateMatrixWorld(true);
+  const bb = new THREE.Box3().setFromObject(droid, true);
+  droid.scale.multiplyScalar(1.8 / (bb.max.y - bb.min.y));
+  droid.updateMatrixWorld(true);
+  const fit = new THREE.Box3().setFromObject(droid, true);
+  const mid = fit.getCenter(new THREE.Vector3());
+  droid.position.set(-mid.x, -fit.min.y, -mid.z); // centred, soles on the floor
+  droid.userData.base = droid.position.clone();
+  if (s.base && s.base !== "tpose") {
+    const clip = clips[s.base.toLowerCase()];
+    if (!clip) throw new Error(`unknown base clip ${s.base}; have ${Object.keys(clips).join(", ")}`);
+    baseAction = mixer.clipAction(clip);
+    baseAction.timeScale = s.baseSpeed ?? 1;
+    baseAction.play();
+  }
+
+  // Frame the whole body: fixed camera at a front three-quarter view (azimuth
+  // 0 = facing the droid, positive = camera moves to the droid's left).
+  const az = (s.camera?.azimuth ?? 20) * DEG, el = (s.camera?.elevation ?? 8) * DEG;
+  const h = 1.8, fov = 30;
+  const dist = s.camera?.distance ?? (h * 1.35) / (2 * Math.tan((fov * DEG) / 2)) * Math.max(1, (s.height / s.width) * 1.0);
+  camera = new THREE.PerspectiveCamera(fov, s.width / s.height, 0.1, 100);
+  // camera.target = look-at height (default 0.92 m); raise it and the distance
+  // for clips that go overhead or airborne, so the whole body stays in frame.
+  const tgt = s.camera?.target ?? 0.92;
+  camera.position.set(Math.sin(az) * Math.cos(el) * dist, tgt + 0.03 + Math.sin(el) * dist, Math.cos(az) * Math.cos(el) * dist);
+  camera.lookAt(0, tgt, 0);
+  return { clips: Object.keys(clips), bones: Object.keys(bones).length };
+};
+
+window.renderAt = (t) => {
+  // Rest first, then the clip, then the offsets: an offset must never
+  // compound onto last frame's pose on a bone the clip does not animate.
+  for (const b of Object.values(bones)) b.quaternion.copy(b.userData.rest);
+  mixer.setTime(t);
+  // Root translation: "root" keys are [t, [x,y,z]] metres in the character
+  // frame (+X the figure's left, +Y up, +Z forward), added to the standing
+  // position. Weight shift, gait bob, crouches, the jump and the fall.
+  if (spec.root) {
+    const [x, y, z] = offsetAt("__root", spec.root, t);
+    droid.position.copy(droid.userData.base).add(new THREE.Vector3(x, y, z));
+  }
+  for (const [joint, keys] of Object.entries(spec.keys ?? {})) {
+    const bone = bones[joint];
+    if (!bone) throw new Error(`no bone ${joint}`);
+    const [x, y, z, w] = offsetAt(joint, keys, t);
+    // Character-frame rotation → this bone's local frame:
+    //   local = restWorld⁻¹ · anat · restWorld, applied on top of the rest.
+    offQ.setFromEuler(offE.set(x * DEG, y * DEG, z * DEG, "XYZ"));
+    offQ.premultiply(invQ.copy(bone.userData.restWorld).invert()).multiply(bone.userData.restWorld);
+    poseQ.copy(bone.userData.rest).multiply(offQ);
+    bone.quaternion.slerp(poseQ, Math.min(1, Math.max(0, w)));
+  }
+  renderer.render(scene, camera);
+  return renderer.domElement.toDataURL("image/png");
+};
+
+window.clampLog = () => clampLog;
+/** Debug: one bone's local quaternion and world position after the last frame. */
+window.inspectBone = (name) => {
+  const b = bones[name];
+  if (!b) return { missing: name, have: Object.keys(bones).slice(0, 8) };
+  const w = new THREE.Vector3();
+  b.getWorldPosition(w);
+  return { name: b.name, q: b.quaternion.toArray().map((v) => +v.toFixed(3)), world: w.toArray().map((v) => +v.toFixed(3)) };
+};
+window.stageReady = true;
+</script>
+</body>
+</html>

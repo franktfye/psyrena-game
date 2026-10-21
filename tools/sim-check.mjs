@@ -790,3 +790,282 @@ const { SKINNER, SKINNER_REINFORCEMENT } = await import(
   );
   console.log("SCENARIO 7 (Skinner's operant engine in the live sim): ALL CHECKS PASSED");
 }
+
+// ---------------------------------------------------------------------------
+// Scenario 8: Erikson's kit against the DPS row of the role contract.
+//
+// Same derivation as Pavlov's (scenario 4) on the DPS shares, with the two
+// places Erikson's shape moves a rate (shared/heroes/erikson.ts header): the
+// add-on basic fires once per palette cast, so S5 is priced at S1's 7.5/min;
+// and S1's 7.5 casts are 3.75 PAIRS, a pair split 1/3 stage, 2/3 virtue.
+// ---------------------------------------------------------------------------
+const { ERIKSON, ERIKSON_PSYCHOSOCIAL } = await import(
+  pathToFileURL(await bundle("shared/heroes/erikson.ts")).href
+);
+{
+  const DPS_SHARE = { s1: 0.4, s2: 0.09, s3: 0.06, s4: 0.2, s5: 0.25 };
+  const w = ERIKSON.baseDamage / 100;
+  const perCastAt = (slot, perMin) => (CONTRACT.budget * w * DPS_SHARE[slot]) / (perMin / 60);
+  console.log(`\nscenario 8: Erikson vs the DPS row at weight ${w} (budget ${CONTRACT.budget * w}/s)`);
+  if (ERIKSON.role !== "dps") fail(`Erikson's role is ${ERIKSON.role}, but his numbers derive at the DPS row`);
+  if (ERIKSON.beats) fail("Erikson grew a beat cycle — the stages are a sequence, not a clock");
+  if (!ERIKSON.psychosocial) fail("Erikson has no psychosocial spec");
+  if (ERIKSON_PSYCHOSOCIAL.stages.length !== 8) fail("Erikson's chart must have eight stages");
+
+  const pairsPerMin = CONTRACT.rates.s1 / 2;
+  exact("S5 add-on basic (at the palette's cadence)", ERIKSON.basic.base, perCastAt("s5", CONTRACT.rates.s1));
+  const pair = perCastAt("s1", pairsPerMin);
+  const stage = ERIKSON.palette.find((p) => p.id === "erikson.stage").base;
+  const virtue = ERIKSON.palette.find((p) => p.id === "erikson.virtue").base;
+  near("S1 stage + virtue per pair", stage + virtue, pair, 0.5);
+  exact("S1 Life Stage (1/3 of a pair)", stage, pair / 3);
+  exact("S2 Moratorium heal", ERIKSON.defense.heal, perCastAt("s2", CONTRACT.rates.s2));
+  exact("S3 Identity Crisis", ERIKSON.chain.base, perCastAt("s3", CONTRACT.rates.s3));
+  const ult = perCastAt("s4", CONTRACT.rates.s4);
+  exact("S4 Life Review direct", ERIKSON.ultimate.base, ult * CONTRACT.ultimate.direct);
+  // Payload priced at the virtues a reference player has when F is up: one
+  // per pair, pairsPerMin per minute of cooldown, capped at maxVirtues.
+  const expectedVirtues = Math.min(
+    ERIKSON_PSYCHOSOCIAL.maxVirtues,
+    pairsPerMin * (ERIKSON.ultimate.cooldownMs / 60_000)
+  );
+  exact("S4 Life Review per virtue", ERIKSON.ultimate.perMark, (ult * (1 - CONTRACT.ultimate.direct)) / expectedVirtues);
+  // The pair refund must be paid for by the keys' price: a correct pair nets
+  // two scaffold palette casts, or Focus (which caps every hero's cast rate)
+  // lets him out-cast the budget — a flat +10 on 8-Focus keys simulated +160%.
+  {
+    const { PALETTE_FOCUS_COST } = await import(pathToFileURL(await bundle("shared/fight/costs.ts")).href);
+    const net = ERIKSON.palette.reduce((n, p) => n + (p.focusCost ?? PALETTE_FOCUS_COST), 0) - ERIKSON_PSYCHOSOCIAL.pairFocusRefund;
+    console.log(`  pair Focus: ${ERIKSON.palette.map((p) => p.focusCost).join(" + ")} − ${ERIKSON_PSYCHOSOCIAL.pairFocusRefund} refund = ${net} (scaffold pair ${2 * PALETTE_FOCUS_COST})`);
+    if (net !== 2 * PALETTE_FOCUS_COST) fail(`a correct pair nets ${net} Focus, budget assumes ${2 * PALETTE_FOCUS_COST}`);
+  }
+  if (ERIKSON.ultimate.maxMarksConsumed !== ERIKSON_PSYCHOSOCIAL.maxVirtues) {
+    fail("Life Review's consumption cap must equal the virtue cap");
+  }
+  // Round trip: the shipped integers at reference cadence sum back to budget.
+  const realised =
+    (ERIKSON.basic.base * CONTRACT.rates.s1 +
+      (stage + virtue) * pairsPerMin +
+      ERIKSON.defense.heal * CONTRACT.rates.s2 +
+      ERIKSON.chain.base * CONTRACT.rates.s3 +
+      (ERIKSON.ultimate.base + ERIKSON.ultimate.perMark * expectedVirtues) * CONTRACT.rates.s4) /
+    60;
+  near("kit total, DPS", realised, CONTRACT.budget * w, 0.5);
+  console.log("SCENARIO 8 (Erikson on the DPS row of the role contract): ALL CHECKS PASSED");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 9: Erikson's rotation, end to end through the live sim —
+// 1-2 pairs, the add-on gate, the unmatched virtue, the loop past stage 8,
+// and Life Review spending virtues (never the team's Marks).
+// ---------------------------------------------------------------------------
+{
+  const realRandom = Math.random;
+  Math.random = () => 0.999; // no crits: damage ratios are the kit's ratios
+  const states = [];
+  const procs = [];
+  const refunds = [];
+  const f = new BossFight(NIGHTMARE_STANDARD, ERIKSON, [], {
+    ...hooks,
+    psychosocialChanged: (s) => states.push(s),
+    defenseProc: (name) => procs.push(name),
+    gainFocus: (n) => refunds.push(n),
+  });
+  const ps = () => f.psychosocialFor("player");
+  if (!states.length || states[0].stage !== 0) fail("the opening stage was not reported before the first press");
+  for (let i = 0; i < Math.ceil((NIGHTMARE_STANDARD.idleS + 1) / DT); i++) f.tick(DT);
+
+  if (f.castBasic(1.0) !== null) fail("the add-on fired before any key 1 or 2");
+  const stageHit = f.castPalette(0, 1.0);
+  if (!ps().armed || !ps().addon) fail("key 1 did not arm the virtue and grant the add-on");
+  if (f.castBasic(1.0) === null) fail("the add-on after key 1 was refused");
+  if (f.castBasic(1.0) !== null) fail("a second add-on fired off one key 1");
+  const virtueHit = f.castPalette(1, 1.0);
+  if (ps().stage !== 1 || ps().virtues !== 1 || ps().armed) fail(`key 2 did not complete stage 1 (${JSON.stringify(ps())})`);
+  if (!procs.includes("Trust vs Mistrust → Hope")) fail(`the pair was not named over the boss (${procs.join(" | ")})`);
+  if (refunds.join() !== String(ERIKSON_PSYCHOSOCIAL.pairFocusRefund)) fail(`a completed pair refunded [${refunds}] Focus`);
+  if (f.castBasic(1.0) === null) fail("the add-on after key 2 was refused");
+  const want = ERIKSON.palette[1].base / ERIKSON.palette[0].base;
+  const got = virtueHit.damage / stageHit.damage;
+  if (Math.abs(got / want - 1) > 0.02) fail(`virtue/stage damage ${got.toFixed(3)}, kit says ${want.toFixed(3)}`);
+
+  // Key 2 with nothing armed: the weak hit, no stack, no advance.
+  const lone = f.castPalette(1, 1.0);
+  const loneWant = ERIKSON_PSYCHOSOCIAL.unmatchedVirtueMult;
+  if (Math.abs(lone.damage / virtueHit.damage / loneWant - 1) > 0.02) {
+    fail(`unmatched virtue paid ${(lone.damage / virtueHit.damage).toFixed(3)} of a matched one, kit says ${loneWant}`);
+  }
+  if (ps().stage !== 1 || ps().virtues !== 1) fail("an unmatched virtue moved the rotation");
+  if (refunds.length !== 1) fail("an unmatched virtue refunded Focus");
+
+  // Seven more pairs: the pointer walks 2..8 and loops back to stage 1.
+  for (let i = 0; i < 7; i++) {
+    f.castPalette(0, 1.0);
+    f.castPalette(1, 1.0);
+  }
+  if (ps().stage !== 0) fail(`after eight pairs the pointer is at stage ${ps().stage + 1}, not back at 1`);
+  if (ps().virtues !== 8) fail(`eight pairs banked ${ps().virtues} virtues`);
+  f.castPalette(0, 1.0);
+  f.castPalette(1, 1.0);
+  if (ps().virtues !== 8) fail("virtues ran past the cap");
+
+  // Life Review spends the virtues, leaves the stage alone and the Marks too.
+  const marksBefore = f.snapshot().marks;
+  const stageBefore = ps().stage;
+  const ultDamage = f.castUltimate();
+  if (ps().virtues !== 0) fail("Life Review did not spend the virtues");
+  if (ps().stage !== stageBefore) fail("Life Review moved the stage pointer");
+  if (f.snapshot().marks !== marksBefore) fail("Life Review touched the team's Mark board");
+  if (!(ultDamage > ERIKSON.ultimate.base)) fail(`Life Review paid ${ultDamage}, no more than its direct share`);
+
+  Math.random = realRandom;
+  console.log(
+    `\nscenario 9: gate held · pair named · virtue/stage ${got.toFixed(2)} · unmatched ${(lone.damage / virtueHit.damage).toFixed(2)} · loop past stage 8 · 8-virtue Life Review ${Math.round(ultDamage)}`
+  );
+  console.log("SCENARIO 9 (Erikson's life-cycle rotation in the live sim): ALL CHECKS PASSED");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 10: Ainsworth on the tank row (Pavlov's derivation, his E/R swap),
+// with the S1 slot spent across the four styles at the reference cadence.
+// ---------------------------------------------------------------------------
+const { AINSWORTH } = await import(pathToFileURL(await bundle("shared/heroes/ainsworth.ts")).href);
+{
+  const w = AINSWORTH.baseDamage / 100;
+  console.log(`\nscenario 10: Ainsworth vs the tank row at weight ${w} (budget ${CONTRACT.budget * w}/s)`);
+  if (AINSWORTH.role !== "tank") fail(`Ainsworth's role is ${AINSWORTH.role}, but her numbers derive at the tank row`);
+  if (AINSWORTH.beats) fail("Ainsworth grew a beat cycle — her kit is flat");
+  if (!AINSWORTH.threatStance) fail("Ainsworth has no threat stance — a tank without one banks 1×");
+  const at = (slot) => (CONTRACT.budget * w * CONTRACT.share[slot]) / (CONTRACT.rates[slot] / 60);
+  exact("S5 Sensitivity", AINSWORTH.basic.base, at("s5"));
+  // S1: cadence (per min) and weight per style; key 4 is priced at its
+  // 30 s cooldown's realistic 1.5/min, the other three share the rest.
+  const STYLE = {
+    "ainsworth.secure": { perMin: 2, weight: 1.0 },
+    "ainsworth.avoidant": { perMin: 2, weight: 1.3 },
+    "ainsworth.ambivalent": { perMin: 2, weight: 0.9 },
+    "ainsworth.disorganized": { perMin: 1.5, weight: 0.5 },
+  };
+  const cadence = Object.values(STYLE).reduce((n, s) => n + s.perMin, 0);
+  if (Math.abs(cadence - CONTRACT.rates.s1) > 1e-9) fail(`style cadence sums to ${cadence}/min, the slot runs ${CONTRACT.rates.s1}`);
+  const slotPerMin = at("s1") * CONTRACT.rates.s1;
+  const x = slotPerMin / Object.values(STYLE).reduce((n, s) => n + s.perMin * s.weight, 0);
+  for (const p of AINSWORTH.palette) exact(`S1 ${p.name}`, p.base, x * STYLE[p.id].weight);
+  const disorg = AINSWORTH.palette.find((p) => p.id === "ainsworth.disorganized");
+  if (60_000 / disorg.cooldownMs < STYLE[disorg.id].perMin) fail("Disorganized is priced above what its cooldown allows");
+  near("S1 per minute", AINSWORTH.palette.reduce((n, p) => n + p.base * STYLE[p.id].perMin, 0), slotPerMin, 0.5);
+  exact("S2 Safe Haven heal", AINSWORTH.defense.heal, at("s2"));
+  exact("S3 Strange Situation", AINSWORTH.chain.base, at("s3"));
+  const f = at("s4");
+  exact("S4 Earned Security direct", AINSWORTH.ultimate.base, f * CONTRACT.ultimate.dmg * CONTRACT.ultimate.direct);
+  exact(
+    "S4 Earned Security per Mark",
+    AINSWORTH.ultimate.perMark,
+    (f * CONTRACT.ultimate.dmg * (1 - CONTRACT.ultimate.direct)) / (AINSWORTH.ultimate.maxMarksConsumed * CONTRACT.ultimate.foreignMix)
+  );
+  exact("S4 Earned Security team heal", AINSWORTH.ultimate.heal, f * CONTRACT.ultimate.heal);
+  const vuln = AINSWORTH.chain.effects.find((e) => e.kind === "vulnerability");
+  const duty = vuln.durationMs / AINSWORTH.chain.cooldownMs;
+  if (Math.abs(vuln.magnitude - 0.15) > 1e-9 || Math.abs(duty - 0.6) > 1e-9) {
+    fail(`Strange Situation sources +${vuln.magnitude * 100}% at ${duty.toFixed(2)} duty, the sheet assumes +15% at 0.60`);
+  }
+  console.log("SCENARIO 10 (Ainsworth on the tank row of the role contract): ALL CHECKS PASSED");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 11: Ainsworth's styles in the live sim, in a two-player party —
+// the variety gate and own cooldown, team immunity (not on herself), the
+// deferred-not-dropped stagger, the heal cut, the taunt, the cleanse, the
+// Sensitivity answer and the threat shed.
+// ---------------------------------------------------------------------------
+{
+  const realRandom = Math.random;
+  Math.random = () => 0.999; // no crits
+  const procs = [];
+  const lockLog = [];
+  const f = BossFight.forParty(
+    NIGHTMARE_STANDARD,
+    [
+      { id: "ains", name: "Ainsworth", hero: AINSWORTH, input: true },
+      { id: "mate", name: "Freud", hero: FREUD, input: true },
+    ],
+    { ...hooks, defenseProc: (n) => procs.push(n), lockPaletteSlot: (i, ms) => lockLog.push({ i, ms }) }
+  );
+  for (let i = 0; i < Math.ceil((NIGHTMARE_STANDARD.idleS + 1) / DT); i++) f.tick(DT);
+  f.nextOutgoingAt = 1e9; // the boss holds its swings: every hit below is placed by hand
+  const A = f.actorBy("ains");
+  const M = f.actorBy("mate");
+  const idx = (id) => AINSWORTH.palette.findIndex((p) => p.id === id);
+  const run = (s) => { for (let i = 0; i < Math.round(s / DT); i++) f.tick(DT); };
+
+  // Variety gate: Disorganized first is refused; after two styles it casts.
+  if (f.castPaletteAs("ains", idx("ainsworth.disorganized"), 1) !== null) fail("Disorganized cast with no styles behind it");
+  M.fixationUntil = f.simT + 5;
+  const ampBefore = f.amp;
+  f.castPaletteAs("ains", idx("ainsworth.secure"), 1);
+  if (M.fixationUntil !== -1) fail("Secure did not lift the teammate's Fixation");
+  if (!(f.amp > ampBefore)) fail("Secure opened no Exploration window");
+  if (f.castPaletteAs("ains", idx("ainsworth.disorganized"), 1) !== null) fail("Disorganized cast after only ONE other style");
+
+  // Avoidant: threat shed, and hits deferred, not dropped.
+  A.threat = 1000;
+  f.castPaletteAs("ains", idx("ainsworth.avoidant"), 1);
+  if (Math.abs(A.threat - 750) > 1e-6) fail(`Avoidant left threat at ${A.threat}, not 750`);
+  const hp0 = A.hp;
+  const mit = f.mitigationFor(A);
+  f.hitCombatant(A, 200);
+  if (A.hp !== hp0) fail("a hit under Masked Distress landed at once");
+  run(4.6);
+  const bled = hp0 - A.hp;
+  const want = 200 * (1 - mit);
+  if (Math.abs(bled - want) > 0.5) fail(`Masked Distress bled ${bled.toFixed(1)}, the mitigated hit was ${want.toFixed(1)}`);
+
+  // Disorganized now casts: immunity for the teammate, not for herself; own cooldown.
+  const dis = f.castPaletteAs("ains", idx("ainsworth.disorganized"), 1);
+  if (!dis) fail("Disorganized refused after Secure and Avoidant inside 8 s");
+  if (!lockLog.some((l) => l.ms === 30_000)) fail("Disorganized did not lock its slot for its 30 s cooldown");
+  const mHp = M.hp;
+  f.hitCombatant(M, 300);
+  if (M.hp !== mHp || !procs.includes("Sheltered")) fail("the sheltered teammate took the hit");
+  const aHp = A.hp;
+  f.hitCombatant(A, 100);
+  if (!(A.hp < aHp)) fail("Disorganized sheltered Ainsworth herself");
+  f.castPaletteAs("ains", idx("ainsworth.secure"), 1);
+  f.castPaletteAs("ains", idx("ainsworth.ambivalent"), 1);
+  if (f.castPaletteAs("ains", idx("ainsworth.disorganized"), 1) !== null) fail("Disorganized recast inside its cooldown");
+  run(3.2);
+  f.hitCombatant(M, 100);
+  if (!(M.hp < mHp)) fail("the teammate was still immune after 3 s");
+
+  // Ambivalent (cast above): the taunt and the heal cut.
+  f.castPaletteAs("ains", idx("ainsworth.ambivalent"), 1);
+  if (f.topThreatTarget()?.id !== "ains") fail("Ambivalent did not taunt the boss onto her");
+  A.hp = A.hpMax - 400;
+  const healed = f.healCombatant(A, 100, "test", null);
+  if (Math.abs(healed - 50) > 1e-6) fail(`a 100 heal under Resistant landed ${healed}, not 50`);
+
+  // Sensitivity: a basic inside 1.5 s of the teammate's hit heals them.
+  run(4.5); // past every window above
+  M.hp = M.hpMax - 300;
+  f.hitCombatant(M, 50);
+  const before = M.hp;
+  f.castBasicAs("ains", 1);
+  const answered = M.hp - before;
+  const sens = AINSWORTH.basic.effects[0].magnitude;
+  if (Math.abs(answered - sens) > 1e-6 || !procs.includes("Sensitivity")) fail(`Sensitivity healed ${answered}, kit says ${sens}`);
+  run(2);
+  f.hitCombatant(M, 50);
+  run(1.6);
+  const late = M.hp;
+  f.castBasicAs("ains", 1);
+  if (M.hp !== late) fail("Sensitivity answered a signal older than its window");
+
+  // Strange Situation sheds half the threat before its own hit banks.
+  A.threat = 1000;
+  f.castChainAs("ains", 1);
+  if (Math.abs(A.threat - 500) > 1e-6) fail(`Strange Situation left threat at ${A.threat}, not 500`);
+
+  Math.random = realRandom;
+  console.log(`\nscenario 11: gate · cleanse · Exploration · threat shed · stagger bled ${bled.toFixed(0)}/${want.toFixed(0)} · teammate sheltered, she is not · cooldown · taunt · heal cut 50% · Sensitivity +${answered}`);
+  console.log("SCENARIO 11 (Ainsworth's attachment styles in the live sim): ALL CHECKS PASSED");
+}

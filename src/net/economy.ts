@@ -126,6 +126,11 @@ export interface FightResultResponse extends Progression {
    * already included in `imaginzAwarded`.
    */
   personalBest?: { kinds: string[]; bonus: number };
+  /**
+   * A hero this win unlocked (server/economy.mjs HERO_UNLOCK_WINS) — Skinner
+   * on the first boss clear, Erikson on the second. Absent otherwise.
+   */
+  heroUnlocked?: string;
 }
 
 export interface RankingsResponse {
@@ -193,6 +198,20 @@ export function adoptPet(petId: string): Promise<PetAdoptResponse> {
 /** Endgame sink: all shards → Imaginz; 409 until every pool pet is owned. */
 export function convertShards(): Promise<{ converted: number; imaginz: number; balance: number; shards: number }> {
   return api("/api/pet/shards/convert", {});
+}
+
+/** Dream Siege settlement (server/economy.mjs handleSurvivalSettle): the server rolls the jackpot. */
+export interface SurvivalSettleResponse {
+  awarded: number; jackpot: boolean; bestWave: number; newBest: boolean; balance: number;
+  /** The cache the run left (null: a loss before the first boss). Unopened, it waits in the village. */
+  lootBox: Pick<LootBox, "id" | "tier" | "name"> | null;
+}
+export function postSurvivalSettle(body: {
+  difficulty: string; victory: boolean; wavesCleared: number; durationS: number;
+  score?: { dealt: number; healed: number; kills: number; downs: number; revives: number };
+  recallRight?: number;
+}): Promise<SurvivalSettleResponse> {
+  return api<SurvivalSettleResponse>("/api/survival/settle", body);
 }
 
 export function postFightResult(stats: FightResultPayload): Promise<FightResultResponse> {
