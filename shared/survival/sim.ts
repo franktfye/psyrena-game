@@ -22,6 +22,8 @@ import { rng } from "./map/lots.ts";
 
 export const HERO_HP = 1000;
 export const HERO_RADIUS = 0.4;
+/** Seconds for one spent dash charge to come back (doubled from 7, 2026-10-24). */
+export const DASH_RECHARGE_S = 14;
 const ROLE_WEIGHT: Record<string, number> = { dps: 100, support: 75, tank: 65, healer: 60 };
 const SIZE_MULT = [0, 0.7, 0.85, 1.0];
 const SPAWN_SHARE = [0, 0.6, 0.8, 1.0];
@@ -400,7 +402,7 @@ export class SurvivalSim {
     const p = this.player(id);
     if (!p || !p.alive || p.dashCharges <= 0 || this.t < p.pinnedUntil) return false;
     p.dashCharges--;
-    p.dashRecharge.push(this.t + 7);
+    p.dashRecharge.push(this.t + DASH_RECHARGE_S);
     p.iframesUntil = this.t + 0.3;
     // A dash tears a Clinging Wraith's tether.
     for (const h of this.hostiles) if (h.latched === id) { h.latched = undefined; h.skillT = 6; }

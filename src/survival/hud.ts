@@ -117,6 +117,8 @@ const CSS = `
 #sv-labels span.fake { color: #fff2b0; }
 #sv-labels span.burn { color: #ffb070; }
 #sv-dash { position: fixed; pointer-events: auto; right: calc(max(16px, env(safe-area-inset-right)) + 110px); bottom: calc(max(14px, env(safe-area-inset-bottom)) + 8px); width: 62px; height: 62px; border-radius: 50%; border: 2px solid rgba(64,230,255,.7); background: rgba(8,20,30,.65); color: #d8f7ff; font: 600 13px system-ui; z-index: 31; touch-action: none; }
+/* Survival has no jump: Space is the dash, and the touch JUMP button would only crowd the stick. */
+body[data-survival] #touch-jump { display: none !important; }
 #sv-dash .pips { display: block; margin-top: 2px; letter-spacing: 3px; }
 #sv-dash .key { position: absolute; left: 50%; top: -9px; transform: translateX(-50%); padding: 1px 5px; border-radius: 4px; background: rgba(8,20,30,.9); border: 1px solid rgba(64,230,255,.55); font: 600 10px ui-monospace, monospace; letter-spacing: .04em; color: #a8f0ff; }
 ${MODAL_CSS}
@@ -185,6 +187,7 @@ export function createSurvivalHud(): SurvivalHud {
     <div class="sv-toasts"></div>
     <div class="sv-callout"></div>`;
   document.body.appendChild(root);
+  document.body.dataset.survival = "1";
   const $ = (sel: string) => root.querySelector(sel) as HTMLElement;
   const dash = document.createElement("button");
   dash.id = "sv-dash";
@@ -365,6 +368,7 @@ export function createSurvivalHud(): SurvivalHud {
       document.getElementById("sv-boons")?.remove();
       root.remove();
       dash.remove();
+      delete document.body.dataset.survival;
     },
   };
 }

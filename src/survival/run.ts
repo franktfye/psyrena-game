@@ -280,18 +280,30 @@ export async function startSurvivalRun(opts: {
   // ---- dash --------------------------------------------------------------------------
   let dashT = 0;
   const dashDir = new Vector3();
+  // Where the hero is actually heading: the last real step (stick or WASD),
+  // measured from position, so the dash follows movement, not the facing
+  // (a hero turned to cast still dashes the way they run).
+  const lastPos = hero.node.position.clone();
+  const moveDir = new Vector3();
+  let movedAt = -1;
   const doDash = () => {
     if (!act.dash()) return;
     sfx.play("dash");
-    // Along the hero's facing (models face -Z at yaw 0).
-    const yaw = hero.node.rotation.y;
-    dashDir.set(-Math.sin(yaw), 0, -Math.cos(yaw));
+    if (performance.now() - movedAt < 200) dashDir.copyFrom(moveDir);
+    else {
+      // Standing still: along the facing (models face -Z at yaw 0).
+      const yaw = hero.node.rotation.y;
+      dashDir.set(-Math.sin(yaw), 0, -Math.cos(yaw));
+    }
     dashT = 0.18;
+    // Turn into the dash, so the body leads the burst.
+    hero.node.rotation.y = Math.atan2(-dashDir.x, -dashDir.z);
   };
   hud.onDash(doDash);
   // Space dashes on a keyboard (Q stays the palette cycle it is everywhere else).
-  // Capture phase on window runs before the hero controller's own Space (jump)
-  // handler, and stopping it there means a dash never also hops.
+  // Survival has no jump: capture phase on window runs before the hero
+  // controller's own Space (jump) handler, and stopping it there means the key
+  // is only the dash. Outside survival, Space still jumps.
   const onKey = (e: KeyboardEvent) => {
     if (e.key !== " " || isTypingInField()) return;
     e.preventDefault();
@@ -509,11 +521,18 @@ export async function startSurvivalRun(opts: {
       beatT += dt;
       while (beatT >= BEAT_PERIOD_S) { beatT -= BEAT_PERIOD_S; beat = (beat + 1) % (kit.beats?.length ?? 1); }
       fight.tick(dt);
+      if (dashT <= 0) {
+        const dx = hero.node.position.x - lastPos.x;
+        const dz = hero.node.position.z - lastPos.z;
+        const d = Math.hypot(dx, dz);
+        if (dt > 0 && d / dt > 0.8) { moveDir.set(dx / d, 0, dz / d); movedAt = performance.now(); }
+      }
       if (dashT > 0) {
         const step = Math.min(dashT, dt);
         hero.node.position.addInPlace(dashDir.scale((5 / 0.18) * step));
         dashT -= step;
       }
+      lastPos.copyFrom(hero.node.position);
       if (party) {
         if (latest) { applyFrame(latest); latest = null; }
         meP.x = hero.node.position.x;
