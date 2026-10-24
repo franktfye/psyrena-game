@@ -166,8 +166,15 @@ export async function createOldKowloon(engine: AbstractEngine, heroId?: string, 
   const boxes = solidBoxes(grid);
   // Blocks are the solid boxes that are NOT obstacles: obstacles (tram, banyans)
   // collide like walls but get their own model, never a mass or building lots.
-  const inObstacle = (b: Rect) =>
-    MAP.obstacles.some((o) => b.x0 >= o.x0 - 0.01 && b.x1 <= o.x1 + 0.01 && b.z0 >= o.z0 - 0.01 && b.z1 <= o.z1 + 0.01);
+  // Covered by obstacles, cell by cell: a box may span two touching ones (banyan + its roots).
+  const inObstacle = (b: Rect) => {
+    for (let z = b.z0 + 0.5; z < b.z1; z += 1) {
+      for (let x = b.x0 + 0.5; x < b.x1; x += 1) {
+        if (!MAP.obstacles.some((o) => x > o.x0 && x < o.x1 && z > o.z0 && z < o.z1)) return false;
+      }
+    }
+    return true;
+  };
   const blocks = boxes.filter((b) => !inObstacle(b));
 
   // ---- Ground: asphalt + paving come from kowloonDressing once the lots exist ----
@@ -317,6 +324,8 @@ export async function createOldKowloon(engine: AbstractEngine, heroId?: string, 
   }
 
   for (const o of MAP.obstacles) {
+    // Banyan roots are colliders only: the tree model already covers them.
+    if (o.name.endsWith(" roots")) continue;
     const spec = OBSTACLE_MODELS[o.name];
     const src = spec ? sources.get(spec.id) : null;
     const w = o.x1 - o.x0;

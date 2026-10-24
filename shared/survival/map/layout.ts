@@ -76,6 +76,33 @@ export function buildWalkGrid(map: MapDef): WalkGrid {
 }
 
 /**
+ * The walk grid as a body WIDER than a cell sees it: every walkable cell
+ * within `cells` of a solid one (or the map edge) is closed. A 0.7 m elite
+ * following the plain grid steers for cell centres 0.5 m from a wall, gets
+ * pushed back out, and jams in any 1 m slot (beside the Temple Square banyans,
+ * 2026-10-24); on this grid its path keeps a body's width of clearance.
+ */
+export function inflateGrid(grid: WalkGrid, cells: number): WalkGrid {
+  const { n, walk } = grid;
+  const out = new Uint8Array(n * n);
+  for (let iz = 0; iz < n; iz++) {
+    for (let ix = 0; ix < n; ix++) {
+      if (!walk[iz * n + ix]) continue;
+      let clear = true;
+      for (let dz = -cells; dz <= cells && clear; dz++) {
+        for (let dx = -cells; dx <= cells; dx++) {
+          const jx = ix + dx;
+          const jz = iz + dz;
+          if (jx < 0 || jz < 0 || jx >= n || jz >= n || !walk[jz * n + jx]) { clear = false; break; }
+        }
+      }
+      out[iz * n + ix] = clear ? 1 : 0;
+    }
+  }
+  return { n, half: grid.half, walk: out };
+}
+
+/**
  * Merge the solid cells into axis-aligned boxes (greedy: grow each run along x,
  * then extend it down z while the whole run stays solid). Gives a few dozen
  * boxes for a street grid, which is what push-out iterates per frame.

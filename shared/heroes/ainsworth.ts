@@ -102,6 +102,8 @@ export const AINSWORTH: Hero = {
       name: "Ambivalent",
       base: 163,
       markType: "bond",
+      // Resistant attachment does not settle: 40% of it keeps stinging for 4 s.
+      overTime: { share: 0.4, durationMs: 4_000, label: "Ambivalent" },
       effects: [
         { kind: "taunt", durationMs: 4_000, target: "boss" },
         { kind: "mitigation.grant", magnitude: 0.1, durationMs: 4_000, target: "team" },
@@ -135,6 +137,8 @@ export const AINSWORTH: Hero = {
     id: "ainsworth.strange-situation",
     name: "Strange Situation",
     base: 77,
+    // The whole room is the experiment: everything within 6 m of the target.
+    aoeRadius: 6,
     cooldownMs: 25_000,
     focusCost: 30,
     effects: [

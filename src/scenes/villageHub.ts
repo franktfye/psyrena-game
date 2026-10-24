@@ -79,6 +79,7 @@ import { setPracticeMode } from "../fight/practice";
 import { buildSurvivalGate } from "./survivalPortal";
 import { enterRankedArena } from "../fight/arenaEntry";
 import { STAGE_DETAIL } from "../ui/heroLore";
+import { overTimeText, reachText } from "../ui/skillText";
 import { openPracticePitIntro } from "../ui/practicePit";
 import { isVoiceMuted } from "../ui/heroCodex";
 import { bindOstPlayer } from "../state/musicSettings";
@@ -5839,7 +5840,7 @@ export function setupSkillBar(
             : `${p.name}. After key 1: deals ${p.base} damage and completes the stage. One add-on basic follows each key.`
           : p.effects.some((e) => e.kind === "ucr.window")
             ? `${p.name}. Deals ${p.base} damage. In a fight, opens the window a bell pairs into.`
-            : `${p.name}. Deals ${p.base} damage. The full effect is in the codex and on the arena bar.`,
+            : `${p.name}. Deals ${p.base} damage. ${overTimeText(p)} The full effect is in the codex and on the arena bar.`.replace("  ", " "),
       icon: skillIcon(slug(p.id)),
       cooldownMs: 1_500,
       kind: "palette" as const,
@@ -5879,7 +5880,7 @@ export function setupSkillBar(
       id: kit.chain.id,
       key: "r",
       label: kit.reinforcement ? "Punish" : wrapLabel(kit.chain.name),
-      tooltip: `${kit.chain.name}. Deals ${kit.chain.base} damage.`,
+      tooltip: `${kit.chain.name}. Deals ${kit.chain.base} damage${reachText(kit.chain)}. ${overTimeText(kit.chain)}`.trim(),
       icon: kit.reinforcement
         ? skillIcon("consequence_punishment")
         : skillIcon(slug(kit.chain.id)),

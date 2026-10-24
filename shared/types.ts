@@ -85,6 +85,29 @@ export interface MitigationGrant {
   target: "self" | "team";
 }
 
+/**
+ * Damage over time (2026-10-24): part of a cast's damage paid as ticks after
+ * impact instead of all at once. The SHARE is moved, not added — the cast's
+ * total is unchanged, so the budget derivations (doc 08) still hold.
+ *
+ * With `zoneRadius` the ticks belong to a patch of GROUND at the impact point:
+ * each tick lands on every hostile inside it at that moment, so a monster that
+ * walks in mid-way takes the rest. Without it, the ticks ride the hostiles the
+ * hit struck. NIGHTMARE is one target standing still, so in a boss fight the
+ * two shapes deliver the same numbers.
+ */
+export interface OverTime {
+  /** Fraction of the cast's damage paid as ticks, 0..1. */
+  share: number;
+  durationMs: number;
+  /** Ticks across the duration. Default: one per second. */
+  ticks?: number;
+  /** Ground-zone radius in metres; omit for a DoT on whatever was struck. */
+  zoneRadius?: number;
+  /** Name floated with each tick in the boss fight ("Identity Crisis"). */
+  label: string;
+}
+
 export interface Ability {
   id: string;
   name: string;
@@ -120,6 +143,8 @@ export interface Ability {
    * effect entry, not this field — this is only how big it is.
    */
   zoneRadius?: number;
+  /** Damage over time — see `OverTime`. */
+  overTime?: OverTime;
   cooldownMs: number;
   focusCost: number;
   effects: Effect[];
@@ -181,6 +206,8 @@ export interface PaletteEntry {
    * key. Omit for an entry that owns its own slot.
    */
   transformsFrom?: string;
+  /** Damage over time — see `OverTime`. */
+  overTime?: OverTime;
   effects: Effect[];
 }
 

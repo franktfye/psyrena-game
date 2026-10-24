@@ -367,6 +367,8 @@ export const PAVLOV: Hero = {
     id: "pavlov.generalization",
     name: "Generalization",
     base: 77,
+    // Similar stimuli, same response: the clock's ring reaches everything near the target.
+    aoeRadius: 6,
     cooldownMs: 25_000,
     focusCost: 30,
     effects: [

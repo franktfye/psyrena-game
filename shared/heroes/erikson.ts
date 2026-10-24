@@ -132,6 +132,8 @@ export const ERIKSON: Hero = {
     name: "Identity Crisis",
     base: 143,
     aoeRadius: AOE_MAP_WIDE_M,
+    // A crisis is not resolved on impact: half the damage lingers on each one struck.
+    overTime: { share: 0.5, durationMs: 4_000, label: "Identity Crisis" },
     cooldownMs: 25_000,
     focusCost: 30,
     effects: [],

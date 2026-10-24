@@ -2,8 +2,8 @@
  * Survival HUD (DOM, like the rest of the game's HUD). Sized for an 844×390
  * landscape phone first (CLAUDE.md rule 7): the wave line and boss bar sit
  * top-centre clear of the player frame, the Recall panel replaces the wave
- * banner while it is open, toasts stack top-right, and the dash button sits
- * beside JUMP.
+ * banner while it is open, toasts stack top-right, and the dash button docks
+ * inside the touch skill cluster (`dockDash`); a keyboard dashes on Space.
  */
 import type { RunStats } from "@shared/survival/sim";
 import { DIFFICULTIES, BOONS, type DifficultyId, type BoonId } from "@shared/survival/content";
@@ -11,6 +11,7 @@ import { openLoot, type LootBox } from "../net/economy";
 import { petSpec } from "@shared/progression";
 import { refreshImaginz } from "../ui/playerHud";
 import { syncLoadout } from "../state/loadout";
+import { detectControlScheme } from "../ui/inputMode";
 import {
   WOW_FONT, WOW_CARD, WOW_CTA, WOW_CTA_HOVER, WOW_BTN, WOW_BTN_HOVER, WOW_ROW, WOW_GOLD_TEXT, WOW_TEXT, WOW_TEXT_DIM, WOW_GOLD,
 } from "../ui/wowChrome";
@@ -116,7 +117,10 @@ const CSS = `
 #sv-labels span.fake { color: #fff2b0; }
 #sv-labels span.burn { color: #ffb070; }
 #sv-dash { position: fixed; pointer-events: auto; right: calc(max(16px, env(safe-area-inset-right)) + 110px); bottom: calc(max(14px, env(safe-area-inset-bottom)) + 8px); width: 62px; height: 62px; border-radius: 50%; border: 2px solid rgba(64,230,255,.7); background: rgba(8,20,30,.65); color: #d8f7ff; font: 600 13px system-ui; z-index: 31; touch-action: none; }
+/* Survival has no jump: Space is the dash, and the touch JUMP button would only crowd the stick. */
+body[data-survival] #touch-jump { display: none !important; }
 #sv-dash .pips { display: block; margin-top: 2px; letter-spacing: 3px; }
+#sv-dash .key { position: absolute; left: 50%; top: -9px; transform: translateX(-50%); padding: 1px 5px; border-radius: 4px; background: rgba(8,20,30,.9); border: 1px solid rgba(64,230,255,.55); font: 600 10px ui-monospace, monospace; letter-spacing: .04em; color: #a8f0ff; }
 ${MODAL_CSS}
 `;
 
@@ -159,6 +163,13 @@ export interface SurvivalHud {
   /** Explain a floor mechanic for a few seconds (bottom centre, above the bar). */
   callout(text: string, ms?: number): void;
   onDash(fn: () => void): void;
+  /**
+   * Touch: move the dash button INTO the skill cluster (#action-bar), beside
+   * its first arc slot, so it scales with the cluster and sits under the same
+   * thumb. Call once the skill bar is mounted. `inlinePalette` = the kit puts a
+   * palette button on the cluster's lead spot (Erikson), so dash goes above it.
+   */
+  dockDash(inlinePalette: boolean): void;
   dispose(): void;
 }
 
@@ -176,10 +187,14 @@ export function createSurvivalHud(): SurvivalHud {
     <div class="sv-toasts"></div>
     <div class="sv-callout"></div>`;
   document.body.appendChild(root);
+  document.body.dataset.survival = "1";
   const $ = (sel: string) => root.querySelector(sel) as HTMLElement;
   const dash = document.createElement("button");
   dash.id = "sv-dash";
-  dash.innerHTML = `DASH<span class="pips">●●</span>`;
+  // A keyboard dashes on Space (survival/run.ts); the badge says so, like the bar's key badges.
+  const keyboard = detectControlScheme() === "keyboard";
+  dash.innerHTML = `DASH<span class="pips">●●</span>${keyboard ? `<span class="key">SPACE</span>` : ""}`;
+  if (keyboard) dash.title = "Dash (Space): a quick burst forward, briefly untouchable.";
   document.body.appendChild(dash);
   let dashFn: (() => void) | null = null;
   dash.addEventListener("pointerdown", (e) => { e.preventDefault(); dashFn?.(); });
@@ -255,6 +270,19 @@ export function createSurvivalHud(): SurvivalHud {
       dash.style.opacity = charges > 0 ? "1" : ".55";
     },
     onDash(fn) { dashFn = fn; },
+    dockDash(inlinePalette) {
+      if (detectControlScheme() !== "touch") return;
+      const bar = document.getElementById("action-bar");
+      if (!bar) return;
+      // Cluster coordinates (actionBar.ts TOUCH_ARC): the basic attack is centred
+      // at (68, 68), arc slot 1 at (190, 77), slot 2 at (164, 143). The free
+      // spot left of slot 1 is the inline palette's lead (256, 40) when a kit
+      // uses one; otherwise dash takes it, else it sits just above it.
+      const SIZE = 58;
+      const at = inlinePalette ? { right: 266, bottom: 112 } : { right: 258, bottom: 42 };
+      dash.style.cssText = `position:absolute;right:${at.right - SIZE / 2}px;bottom:${at.bottom - SIZE / 2}px;width:${SIZE}px;height:${SIZE}px;font-size:12px;z-index:2`;
+      bar.appendChild(dash);
+    },
     openBoons(options, onPick) {
       document.getElementById("sv-boons")?.remove();
       const m = document.createElement("div");
@@ -340,6 +368,7 @@ export function createSurvivalHud(): SurvivalHud {
       document.getElementById("sv-boons")?.remove();
       root.remove();
       dash.remove();
+      delete document.body.dataset.survival;
     },
   };
 }

@@ -11,6 +11,13 @@
 import type { Scene } from "@babylonjs/core/scene";
 import { Matrix, Vector3 } from "@babylonjs/core/Maths/math.vector";
 
+/**
+ * Live anchor: called every frame while the number floats, so a number over a
+ * walking monster walks with it. Return null once the target is gone — the
+ * number then finishes where it last was.
+ */
+export type Follow = () => Vector3 | null;
+
 export interface DamageNumbers {
   /**
    * Pop a number at a world position. `crit` renders larger + golden;
@@ -20,7 +27,7 @@ export interface DamageNumbers {
    * still has to be told apart at a glance — a white 86 over your own head
    * reads as damage taken, which is the opposite of what happened.
    */
-  spawn(world: Vector3, amount: number, crit?: boolean, kind?: "damage" | "heal" | "taken"): void;
+  spawn(world: Vector3, amount: number, crit?: boolean, kind?: "damage" | "heal" | "taken", follow?: Follow): void;
   /**
    * Pop a word instead of a number — Defense Mechanism procs ("Projection!").
    * Same pipeline and anchor as the damage ticks, but it lives ~3× longer, so
@@ -32,7 +39,12 @@ export interface DamageNumbers {
    * a hit number — it IS a hit, it just needs its source named because the
    * cast that caused it happened a phase ago.
    */
-  spawnDot(world: Vector3, amount: number, label: string): void;
+  spawnDot(world: Vector3, amount: number, label: string, follow?: Follow): void;
+  /**
+   * A pickup's yield over the hero: "+120 HP" (green) or "+25 Focus" (blue).
+   * Text, not a bare number, because two pools fill from the same orbs.
+   */
+  spawnGain(world: Vector3, text: string, kind: "heal" | "focus"): void;
   dispose(): void;
 }
 
@@ -42,7 +54,7 @@ const LIFE = 0.95;
 const TEXT_LIFE = 2.6;
 /** Upward screen drift over the life, px. */
 const RISE = 64;
-/** Cap on concurrent numbers — a spammy GCD rotation must not flood the DOM. */
+/** Default cap on concurrent numbers — a spammy GCD rotation must not flood the DOM. */
 const MAX_LIVE = 24;
 
 interface LiveNumber {
@@ -52,9 +64,13 @@ interface LiveNumber {
   age: number;
   /** Seconds this element lives — LIFE for numbers, TEXT_LIFE for proc names. */
   life: number;
+  follow?: Follow;
+  /** Extra screen-space lift, px (pickup gains stack instead of overlapping). */
+  yOff?: number;
 }
 
-export function createDamageNumbers(scene: Scene): DamageNumbers {
+export function createDamageNumbers(scene: Scene, opts: { maxLive?: number } = {}): DamageNumbers {
+  const maxLive = opts.maxLive ?? MAX_LIVE;
   const style = document.createElement("style");
   style.textContent = `
 .psy-dmg {
@@ -84,6 +100,14 @@ export function createDamageNumbers(scene: Scene): DamageNumbers {
   font-size: 14px; color: #d9b3ff;
   text-shadow: 0 1px 2px #000, 0 0 8px rgba(190,120,255,.7);
 }
+.psy-dmg.gain {
+  font-size: 20px; font-weight: 800; color: #7dfaa8;
+  text-shadow: 0 1px 2px #000, 0 0 8px rgba(80,255,150,.65);
+  animation: psyDmgPop .25s ease-out;
+}
+.psy-dmg.gain.focus {
+  color: #8fd8ff; text-shadow: 0 1px 2px #000, 0 0 8px rgba(70,170,255,.75);
+}
 @keyframes psyDmgPop {
   0% { scale: 1.6; }
   100% { scale: 1; }
@@ -92,6 +116,8 @@ export function createDamageNumbers(scene: Scene): DamageNumbers {
   document.head.appendChild(style);
 
   const live: LiveNumber[] = [];
+  let lastGainAt = -1e9;
+  let gainStack = 0;
   let rafId = 0;
   let lastT = 0;
   const identity = Matrix.Identity();
@@ -114,13 +140,18 @@ export function createDamageNumbers(scene: Scene): DamageNumbers {
         n.age += dt;
         const k = n.age / n.life;
         if (k >= 1) continue;
+        if (n.follow) {
+          const at = n.follow();
+          if (at) n.anchor.copyFrom(at);
+          else n.follow = undefined;
+        }
         const p = Vector3.Project(n.anchor, identity, transform, viewport);
         if (p.z < 0 || p.z > 1) {
           n.el.style.opacity = "0";
           continue;
         }
         const x = rect.left + (p.x / w) * rect.width + n.jitterX;
-        const y = rect.top + (p.y / h) * rect.height - k * RISE;
+        const y = rect.top + (p.y / h) * rect.height - k * RISE - (n.yOff ?? 0);
         n.el.style.left = `${x}px`;
         n.el.style.top = `${y}px`;
         n.el.style.opacity = k < 0.6 ? "1" : `${(1 - k) / 0.4}`;
@@ -136,10 +167,10 @@ export function createDamageNumbers(scene: Scene): DamageNumbers {
   };
 
   return {
-    spawn(world, amount, crit = false, kind = "damage") {
+    spawn(world, amount, crit = false, kind = "damage", follow) {
       if (amount <= 0) return;
       // Drop the oldest when saturated — newest feedback matters most.
-      if (live.length >= MAX_LIVE) live.shift()?.el.remove();
+      if (live.length >= maxLive) live.shift()?.el.remove();
       const el = document.createElement("div");
       el.className = `psy-dmg${crit ? " crit" : ""}${kind === "heal" ? " heal" : kind === "taken" ? " taken" : ""}`;
       const n = Math.round(amount);
@@ -152,18 +183,19 @@ export function createDamageNumbers(scene: Scene): DamageNumbers {
         jitterX: (Math.random() * 2 - 1) * 26,
         age: 0,
         life: LIFE,
+        follow,
       });
       if (!rafId) {
         lastT = performance.now();
         rafId = requestAnimationFrame(tick);
       }
     },
-    spawnDot(world, amount, label) {
+    spawnDot(world, amount, label, follow) {
       if (amount <= 0) return;
-      if (live.length >= MAX_LIVE) live.shift()?.el.remove();
+      if (live.length >= maxLive) live.shift()?.el.remove();
       const el = document.createElement("div");
       el.className = "psy-dmg dot";
-      el.textContent = `${Math.round(amount)} ${label}`;
+      el.textContent = label ? `${Math.round(amount)} ${label}` : `${Math.round(amount)}`;
       el.style.opacity = "0";
       document.body.appendChild(el);
       live.push({
@@ -172,7 +204,25 @@ export function createDamageNumbers(scene: Scene): DamageNumbers {
         jitterX: (Math.random() * 2 - 1) * 26,
         age: 0,
         life: LIFE,
+        follow,
       });
+      if (!rafId) {
+        lastT = performance.now();
+        rafId = requestAnimationFrame(tick);
+      }
+    },
+    spawnGain(world, text, kind) {
+      if (live.length >= maxLive) live.shift()?.el.remove();
+      const el = document.createElement("div");
+      el.className = `psy-dmg gain${kind === "focus" ? " focus" : ""}`;
+      el.textContent = text;
+      el.style.opacity = "0";
+      document.body.appendChild(el);
+      // Two orbs collected together (HP + Focus) stack one line apart.
+      const now = performance.now();
+      gainStack = now - lastGainAt < 600 ? gainStack + 1 : 0;
+      lastGainAt = now;
+      live.push({ el, anchor: world.clone(), jitterX: 0, age: 0, life: LIFE * 1.6, yOff: gainStack * 24 });
       if (!rafId) {
         lastT = performance.now();
         rafId = requestAnimationFrame(tick);
@@ -180,7 +230,7 @@ export function createDamageNumbers(scene: Scene): DamageNumbers {
     },
     spawnText(world, text) {
       if (!text) return;
-      if (live.length >= MAX_LIVE) live.shift()?.el.remove();
+      if (live.length >= maxLive) live.shift()?.el.remove();
       const el = document.createElement("div");
       el.className = "psy-dmg proc";
       el.textContent = text;

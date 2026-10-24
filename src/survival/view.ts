@@ -56,6 +56,8 @@ interface Body {
   playing: string;
   ring: Mesh | null;
   tag: Mesh | null;
+  /** Violet sigil under a monster while a hero's damage-over-time rides it. */
+  dotMark?: Mesh | null;
   lastX: number;
   lastZ: number;
   dyingT: number;
@@ -238,6 +240,9 @@ export function createSurvivalView(scene: Scene, sim: SurvivalSim): SurvivalView
     g.fillStyle = f;
     g.fillRect(0, 0, w, w);
   });
+  // Heroes' damage zones and DoT marks: the party's colours (cyan, violet), never the enemy's red.
+  const mZone = decalMat("svZone", tex("svZoneTex", 256, 256, sigil("90,220,255", "rgba(60,200,255,0.9)")), true);
+  const mDotMark = decalMat("svDotMark", tex("svDotTex", 128, 128, sigil("200,130,255", "rgba(170,90,255,0.9)")), true);
   const mTele = decalMat("svTele", tTele);
   const mTeleFill = decalMat("svTeleFill", tFill);
   const mFake = decalMat("svFake", tFake); // the lie: visible, but quieter than the real hit
@@ -388,6 +393,24 @@ export function createSurvivalView(scene: Scene, sim: SurvivalSim): SurvivalView
       else if (moved > 0.3) play(b, "walk", true);
       else play(b, "idle", true);
       if (h.kind === "elite") eliteDressing(b, h);
+      const dotted = !!(h.dots?.length || h.dotted);
+      if (dotted && !b.dotMark) {
+        const m = MeshBuilder.CreatePlane(`sv_dot_${h.id}`, { size: 1.5 }, scene);
+        m.rotation.x = Math.PI / 2;
+        m.position.y = 0.035;
+        m.scaling.setAll(h.kind === "boss" ? 3.4 : h.kind === "elite" ? 1.6 : 1);
+        m.material = mDotMark;
+        m.isPickable = false;
+        m.parent = b.root;
+        b.dotMark = m;
+      }
+      if (b.dotMark) {
+        b.dotMark.setEnabled(dotted);
+        if (dotted) {
+          b.dotMark.rotation.y += dt * 1.8;
+          b.dotMark.visibility = 0.7 + 0.3 * Math.sin(sim.t * 8 + h.id);
+        }
+      }
     }
     for (const [id, b] of live) {
       if (seen.has(id)) continue;
@@ -417,6 +440,36 @@ export function createSurvivalView(scene: Scene, sim: SurvivalSim): SurvivalView
         else b.root.dispose();
         pools.set(key, pool);
       } else b.root.dispose();
+    }
+  }
+
+  // ---- heroes' damage zones ---------------------------------------------------------
+  const zoneMeshes = new Map<number, { m: Mesh; ticks: number }>();
+  function syncZones(dt: number): void {
+    const seen = new Set<number>();
+    for (const zn of sim.zones) {
+      seen.add(zn.id);
+      let z = zoneMeshes.get(zn.id);
+      if (!z) {
+        const m = MeshBuilder.CreatePlane(`sv_zone_${zn.id}`, { size: zn.r * 2 }, scene);
+        m.rotation.x = Math.PI / 2;
+        m.position.set(zn.x, 0.045, zn.z);
+        m.material = mZone;
+        m.isPickable = false;
+        z = { m, ticks: zn.ticksLeft };
+        zoneMeshes.set(zn.id, z);
+      }
+      // A pulse on every tick, so the rhythm of the damage reads on the floor.
+      if (zn.ticksLeft < z.ticks) { z.ticks = zn.ticksLeft; z.m.scaling.setAll(1.08); }
+      const k = z.m.scaling.x;
+      z.m.scaling.setAll(1 + (k - 1) * Math.max(0, 1 - dt * 6));
+      z.m.rotation.y += dt * 0.5;
+      z.m.visibility = zn.ticksLeft <= 1 ? 0.55 : 0.85;
+    }
+    for (const [id, z] of zoneMeshes) {
+      if (seen.has(id)) continue;
+      z.m.dispose();
+      zoneMeshes.delete(id);
     }
   }
 
@@ -741,6 +794,7 @@ export function createSurvivalView(scene: Scene, sim: SurvivalSim): SurvivalView
     sync(dt) {
       syncHostiles(dt);
       syncHazards(dt);
+      syncZones(dt);
       syncSmall();
       syncRecall();
       syncLabels();
@@ -757,6 +811,7 @@ export function createSurvivalView(scene: Scene, sim: SurvivalSim): SurvivalView
       for (const pool of pools.values()) for (const b of pool) b.root.dispose();
       for (const d of decals.values()) { d.ring.dispose(); d.fill?.dispose(); d.flame?.dispose(); }
       for (const sh of shocks) sh.m.dispose();
+      for (const z of zoneMeshes.values()) z.m.dispose();
       for (const m of projMeshes.values()) for (const i of [m.core, m.glow, m.spot, ...m.trail]) i.dispose();
       for (const m of [projCore, projGlow, projSpot, ...pickMeshes.values(), ...recallMeshes]) m.dispose();
       for (const p of prints) p.m.dispose();
