@@ -137,7 +137,9 @@ function frameOf(s) {
       hp: Math.round(h.hp), hpMax: h.hpMax, state: h.state, stateT: r2(h.stateT), born: r2(h.born),
       invulnerable: h.invulnerable, twinOf: h.twinOf, ageTag: h.ageTag, debuffUntil: h.debuffUntil,
       invisibleUntil: h.invisibleUntil, notches: h.notches, stacks: h.stacks,
+      dotted: h.dots?.length ? true : undefined,
     })),
+    zones: sim.zones.map((z) => ({ id: z.id, player: z.player, x: r2(z.x), z: r2(z.z), r: z.r, ticksLeft: z.ticksLeft, periodS: z.periodS })),
     hazards: sim.hazards.map((z) => ({ ...z, x: r2(z.x), z: r2(z.z), t: r2(z.t) })),
     projectiles: sim.projectiles.map((p) => ({ id: p.id, x: r2(p.x), z: r2(p.z), r: p.r })),
     pickups: sim.pickups.map((p) => ({ id: p.id, kind: p.kind, x: r2(p.x), z: r2(p.z), life: r2(p.life) })),
@@ -210,7 +212,12 @@ function applyInput(s, uid, body) {
     const amount = Math.max(0, Number(h.amount) || 0);
     if (windowSum(dmgList, now, amount) > DPS_CAP) continue;
     const cast = { player: id, slotId: String(h.slotId ?? ""), kind: String(h.kind ?? "basic"), answersTag: h.answersTag, consequence: h.consequence };
-    if (h.area) sim.hitArea(Number(h.x) || 0, Number(h.z) || 0, Math.min(8, Number(h.r) || 6), amount, !!h.crit, cast);
+    // Over-time shares: `amount` is the total, already counted against the cap above.
+    const ticks = Math.max(1, Math.min(10, Math.round(Number(h.ticks) || 1)));
+    const periodS = Math.max(0.3, Math.min(2, Number(h.periodS) || 1));
+    if (h.zone) sim.addZone(Number(h.x) || 0, Number(h.z) || 0, Math.min(8, Number(h.r) || 6), amount, ticks, periodS, cast, h.now === true);
+    else if (h.dot) sim.addDot(Number(h.target), amount, ticks, periodS, cast);
+    else if (h.area) sim.hitArea(Number(h.x) || 0, Number(h.z) || 0, Math.min(8, Number(h.r) || 6), amount, !!h.crit, cast);
     else sim.hitHostile(Number(h.target), amount, !!h.crit, cast);
   }
   const heal = Math.max(0, Number(body.heal) || 0);

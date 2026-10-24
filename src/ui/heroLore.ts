@@ -22,6 +22,7 @@ import { SKINNER, SKINNER_REINFORCEMENT } from "@shared/heroes/skinner";
 import { ERIKSON, ERIKSON_PSYCHOSOCIAL } from "@shared/heroes/erikson";
 import { AINSWORTH } from "@shared/heroes/ainsworth";
 import { COMBAT, BEAT_PERIOD_S } from "@shared/combat";
+import { overTimeText, reachText } from "./skillText";
 
 // Palette cost and cooldown are hardcoded on the bar scaffold, not on the kit:
 // 8 Focus (FOCUS_COST in src/fight/arenaCombat.ts) and a 3 s per-stage cooldown
@@ -107,7 +108,7 @@ export const SKILL_LORE: SkillLore[] = [
       "Deal damage to every enemy on the map. For a short time your next 3 stage casts cannot be wrong.",
     numbers: () =>
       // The 8 sec charge window is the literal in castChain (bossFight.ts).
-      `Deals ${FREUD.chain.base} damage to all enemies. For 8 sec your next 3 stage casts are corrected automatically when wrong, though the Marks they place count at half value. Costs ${FREUD.chain.focusCost} Focus. ${FREUD.chain.cooldownMs / 1000} sec cooldown.`,
+      `Deals ${FREUD.chain.base} damage to all enemies. ${overTimeText(FREUD.chain)} For 8 sec your next 3 stage casts are corrected automatically when wrong, though the Marks they place count at half value. Costs ${FREUD.chain.focusCost} Focus. ${FREUD.chain.cooldownMs / 1000} sec cooldown.`,
     howToUse:
       "Cast it when the boss shifts forms faster than you can read them, then spend the three safe casts while you catch up. It is also your best button when extra enemies join the fight.",
     theory:
@@ -254,7 +255,7 @@ export const PAVLOV_SKILL_LORE: SkillLore[] = [
     summary:
       "A flying clock joins the fight. The boss turns on you, and takes increased damage from everyone while the clock ticks.",
     numbers: () =>
-      `Deals ${PAVLOV.chain.base} damage. Taunts the boss for ${(PAVLOV.chain.effects.find((e) => e.kind === "taunt")?.durationMs ?? 0) / 1000} sec. The boss takes ${pct(PAVLOV.chain.effects.find((e) => e.kind === "vulnerability")?.magnitude ?? 0)} increased damage for ${(PAVLOV.chain.effects.find((e) => e.kind === "vulnerability")?.durationMs ?? 0) / 1000} sec. Costs ${PAVLOV.chain.focusCost} Focus. ${PAVLOV.chain.cooldownMs / 1000} sec cooldown.`,
+      `Deals ${PAVLOV.chain.base} damage${reachText(PAVLOV.chain)}. Taunts the boss for ${(PAVLOV.chain.effects.find((e) => e.kind === "taunt")?.durationMs ?? 0) / 1000} sec. The boss takes ${pct(PAVLOV.chain.effects.find((e) => e.kind === "vulnerability")?.magnitude ?? 0)} increased damage for ${(PAVLOV.chain.effects.find((e) => e.kind === "vulnerability")?.durationMs ?? 0) / 1000} sec. Costs ${PAVLOV.chain.focusCost} Focus. ${PAVLOV.chain.cooldownMs / 1000} sec cooldown.`,
     howToUse:
       "This is your taunt. Save it for the moment an ally overdraws threat, or weave it on cooldown for the team damage. The vulnerability is most of what you give the team, so keep its uptime high.",
     theory:
@@ -465,7 +466,7 @@ export const ERIKSON_SKILL_LORE: SkillLore[] = [
     key: "R",
     summary: "Shakes every enemy at once.",
     numbers: () =>
-      `Deals ${ERIKSON.chain.base} damage to every enemy. Costs ${ERIKSON.chain.focusCost} Focus. ${ERIKSON.chain.cooldownMs / 1000} sec cooldown.`,
+      `Deals ${ERIKSON.chain.base} damage to every enemy. ${overTimeText(ERIKSON.chain)} Costs ${ERIKSON.chain.focusCost} Focus. ${ERIKSON.chain.cooldownMs / 1000} sec cooldown.`,
     howToUse: "Press it on cooldown. Against a crowd it hits every one of them.",
     theory:
       "Erikson coined the term identity crisis for the adolescent struggle between a coherent sense of self and role confusion. James Marcia later measured it as four identity statuses, the most tested part of the stage model.",
@@ -538,7 +539,7 @@ export const AINSWORTH_SKILL_LORE: SkillLore[] = [
     summary: "The taunt: cling to the boss's attention, and refuse to be soothed.",
     numbers: () => {
       const t = ainFx("ainsworth.ambivalent", "taunt");
-      return `Deals ${ainStyle("ainsworth.ambivalent").base} damage and places a Bond Mark. The boss locks onto you for ${ainSec(t?.durationMs)} sec, the team takes ${pct(ainFx("ainsworth.ambivalent", "mitigation.grant")?.magnitude ?? 0)} less damage, and healing on you is cut ${pct(ainFx("ainsworth.ambivalent", "heal.cut.self")?.magnitude ?? 0)} while it lasts.`;
+      return `Deals ${ainStyle("ainsworth.ambivalent").base} damage and places a Bond Mark. ${overTimeText(ainStyle("ainsworth.ambivalent"))} The boss locks onto you for ${ainSec(t?.durationMs)} sec, the team takes ${pct(ainFx("ainsworth.ambivalent", "mitigation.grant")?.magnitude ?? 0)} less damage, and healing on you is cut ${pct(ainFx("ainsworth.ambivalent", "heal.cut.self")?.magnitude ?? 0)} while it lasts.`;
     },
     howToUse: "Press it when the boss is on a teammate. Tell your healer before you do.",
     theory:
@@ -587,7 +588,7 @@ export const AINSWORTH_SKILL_LORE: SkillLore[] = [
     summary: "Step away, come back, and see how the boss reacts.",
     numbers: () => {
       const v = AIN.chain.effects.find((e) => e.kind === "vulnerability");
-      return `Deals ${AIN.chain.base} damage. You shed ${pct(AIN.chain.effects.find((e) => e.kind === "threat.drop")?.magnitude ?? 0)} of your threat, and the boss takes ${pct(v?.magnitude ?? 0)} more damage from everyone for ${ainSec(v?.durationMs)} sec. Costs ${AIN.chain.focusCost} Focus. ${ainSec(AIN.chain.cooldownMs)} sec cooldown.`;
+      return `Deals ${AIN.chain.base} damage${reachText(AIN.chain)}. You shed ${pct(AIN.chain.effects.find((e) => e.kind === "threat.drop")?.magnitude ?? 0)} of your threat, and the boss takes ${pct(v?.magnitude ?? 0)} more damage from everyone for ${ainSec(v?.durationMs)} sec. Costs ${AIN.chain.focusCost} Focus. ${ainSec(AIN.chain.cooldownMs)} sec cooldown.`;
     },
     howToUse: "Press it on cooldown. It also passes the boss to a teammate when you need a breather.",
     theory:

@@ -38,6 +38,10 @@ export const OLD_KOWLOON: MapDef = {
     // Banyans in the temple square's north corners, clear of the fighting floor.
     { name: "Banyan NW", x0: -16, x1: -12, z0: 15, z1: 19 },
     { name: "Banyan NE", x0: 12, x1: 16, z0: 15, z1: 19 },
+    // Their roots close the 1 m slot to the square's side wall: nothing big can
+    // follow a hero in there, so it was a hiding spot and an elite trap (2026-10-24).
+    { name: "Banyan NW roots", x0: -17, x1: -16, z0: 15, z1: 19 },
+    { name: "Banyan NE roots", x0: 16, x1: 17, z0: 15, z1: 19 },
     // Tram terminus: the shelter along the south edge, a parked tram mid-square.
     { name: "Tram Shelter", x0: -47, x1: -37, z0: -22, z1: -19 },
     { name: "Tram", x0: -47, x1: -38, z0: -10, z1: -7.4 },

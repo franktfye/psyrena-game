@@ -106,6 +106,8 @@ export const FREUD: Hero = {
     name: "Free Association",
     base: 119,
     aoeRadius: AOE_MAP_WIDE_M,
+    // Half of it keeps surfacing: a 5 m patch that hits whatever wanders in for 4 s.
+    overTime: { share: 0.5, durationMs: 4_000, zoneRadius: 5, label: "Free Association" },
     cooldownMs: 25_000,
     focusCost: 30,
     effects: [{ kind: "palette.auto-correct", magnitude: 3, target: "self" }],

@@ -39,7 +39,7 @@ import {
   type MatchFormat,
 } from "../combat.ts";
 import type { BossFightScript, FightPhaseId, SimAllySpec } from "../bosses/nightmare.ts";
-import type { Hero } from "../types.ts";
+import type { Hero, OverTime } from "../types.ts";
 import {
   castAddon,
   castLifeStage,
@@ -318,6 +318,31 @@ export interface PendingHit {
    * `landHit` fans the damage across every hostile inside it.
    */
   aoeRadius?: number;
+  /**
+   * The share of this hit paid later, in ticks (`OverTime`). `damage` above is
+   * the impact part only; `total` here is already priced by the same cast
+   * (beat, Marks, gear, crit). `landHit` opens the tick train.
+   */
+  overTime?: PendingOverTime;
+}
+
+export interface PendingOverTime {
+  total: number;
+  ticks: number;
+  periodS: number;
+  zoneRadius?: number;
+  label: string;
+}
+
+/** Split a priced hit into its impact part and its over-time part. */
+export function splitOverTime(damage: number, spec: OverTime | undefined): { damage: number; overTime?: PendingOverTime } {
+  if (!spec || spec.share <= 0 || damage <= 0) return { damage };
+  const share = Math.min(1, spec.share);
+  const ticks = Math.max(1, spec.ticks ?? Math.round(spec.durationMs / 1000));
+  return {
+    damage: damage * (1 - share),
+    overTime: { total: damage * share, ticks, periodS: spec.durationMs / 1000 / ticks, zoneRadius: spec.zoneRadius, label: spec.label },
+  };
 }
 
 /**
@@ -537,6 +562,8 @@ interface FightActor {
    * damage in ticks, one float per tick, instead of one instant slab.
    */
   ultTicks: { perTick: number; left: number; nextAt: number } | null;
+  /** Live damage-over-time trains this actor opened (`OverTime`), one per landed cast. */
+  dots: { perTick: number; left: number; periodS: number; nextAt: number; label: string }[];
 
   // ---- attachment effects (Ainsworth's kit, but generic effect kinds) ----
   /** `team.immunity`: boss hits on this actor land nowhere until then. */
@@ -796,6 +823,7 @@ export class BossFight {
       viTickers: [],
       psycho: hero?.psychosocial ? psychosocialStart() : null,
       ultTicks: null,
+      dots: [],
       immuneUntil: -1,
       staggerUntil: -1,
       staggerSpreadS: 0,
@@ -980,7 +1008,7 @@ export class BossFight {
       }
     }
     const { damage, crit } = this.playerHit(a, basicBase, effBeat, false);
-    return { damage, crit, appliesMark: false, grantsDebuffStack: false };
+    return { ...splitOverTime(damage, a.hero.basic.overTime), crit, appliesMark: false, grantsDebuffStack: false };
   }
 
   /**
@@ -1071,7 +1099,7 @@ export class BossFight {
     this.applyPaletteEffects(a, entry.effects);
     const base = this.psychosocialBase(a, entry);
     const { damage, crit } = this.playerHit(a, base, this.beatOf(a, beat), true);
-    return { damage, crit, appliesMark, grantsDebuffStack, markCount };
+    return { ...splitOverTime(damage, entry.overTime), crit, appliesMark, grantsDebuffStack, markCount };
   }
 
   /**
@@ -1786,7 +1814,7 @@ export class BossFight {
     }
     const { damage, crit } = this.playerHit(a, ability.base, this.beatOf(a, beat), true);
     return {
-      damage,
+      ...splitOverTime(damage, ability.overTime),
       crit,
       appliesMark: false,
       grantsDebuffStack: false,
@@ -1982,6 +2010,13 @@ export class BossFight {
       this.addMark();
     }
     if (hit.grantsDebuffStack) this.addDebuffStack();
+    // The over-time share: one tick train per struck hostile (one, here).
+    const ot = hit.overTime;
+    if (ot && ot.total > 0) {
+      for (let i = 0; i < struck.length; i++) {
+        a.dots.push({ perTick: ot.total / ot.ticks, left: ot.ticks, periodS: ot.periodS, nextAt: this.simT + ot.periodS, label: ot.label });
+      }
+    }
     return dealt;
   }
 
@@ -2085,6 +2120,22 @@ export class BossFight {
       a.ultTicks.left -= 1;
       a.ultTicks.nextAt += ULT_TICK_PERIOD_S;
       if (a.ultTicks.left <= 0 || !this.inCombat) a.ultTicks = null;
+    }
+    // Skill DoTs: each train floats its own ticks under its skill's name.
+    for (const a of this.actors) {
+      if (!a.dots.length) continue;
+      for (const d of a.dots) {
+        while (d.left > 0 && this.simT >= d.nextAt && this.inCombat) {
+          const dealt = this.damageBoss(d.perTick, false);
+          this.addThreat(a, dealt);
+          this.creditDamageDealt(a, dealt);
+          this.hooks.dotTick?.(d.label, dealt, a.id);
+          d.left -= 1;
+          d.nextAt += d.periodS;
+        }
+      }
+      a.dots = a.dots.filter((d) => d.left > 0);
+      if (!this.inCombat) return; // damageBoss already called the victory
     }
     if (phase.outgoing && this.phaseT >= this.nextOutgoingAt) {
       this.nextOutgoingAt += phase.outgoing.periodS;

@@ -75,6 +75,7 @@ import { openLootResult, stashLootResult } from "../ui/lootPanel";
 import { refreshImaginz, refreshProgress, refreshStance } from "../ui/playerHud";
 import { BossFrame } from "./bossFrame";
 import { STAGE_DETAIL } from "../ui/heroLore";
+import { overTimeText, reachText } from "../ui/skillText";
 import { SKILL_ICON_HEROES, loadArenaHero, stanceKey, type ArenaHero, type ArenaCastKind } from "./arenaHero";
 import { VillageClient, type VillagePlayer } from "../net/village";
 import { createHeroVoice, voiceKeyFor } from "../scenes/villageHub";
@@ -812,7 +813,7 @@ export async function setupArenaCombat(
       if (p.requiresVariety)
         bits.push(`needs ${p.requiresVariety.distinct} different styles cast in the last ${p.requiresVariety.withinMs / 1000} sec`);
       if (p.cooldownMs) bits.push(`${p.cooldownMs / 1000} sec cooldown`);
-      return `${p.name}. ${bits.join("; ")}.`;
+      return `${p.name}. ${bits.join("; ")}. ${overTimeText(p)}`.trim();
     };
     const defenseTooltip = (): string => {
       const a = HERO.defense;
@@ -834,7 +835,7 @@ export async function setupArenaCombat(
     };
     const chainTooltip = (): string => {
       const a = HERO.chain;
-      const bits = [`Deals ${a.base} damage${a.aoeRadius ? " to every enemy" : ""}`];
+      const bits = [`Deals ${a.base} damage${reachText(a)}`];
       for (const e of a.effects) {
         if (e.kind === "palette.auto-correct")
           bits.push("your next 3 stage casts cannot be wrong, though their Marks count at half value");
@@ -843,7 +844,7 @@ export async function setupArenaCombat(
         else if (e.kind === "vulnerability")
           bits.push(`the boss takes ${Math.round((e.magnitude ?? 0) * 100)} percent more damage for ${(e.durationMs ?? 0) / 1000} sec`);
       }
-      return `${a.name}. ${bits.join("; ")}.`;
+      return `${a.name}. ${bits.join("; ")}. ${overTimeText(a)}`.trim();
     };
     const ultimateTooltip = (): string => {
       const u = HERO.ultimate;

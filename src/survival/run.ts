@@ -26,6 +26,7 @@ import { pushOut } from "@shared/survival/map/layout";
 import { BOONS, type DifficultyId, type HeroKitId } from "@shared/survival/content";
 import { OLD_KOWLOON } from "@shared/survival/map/oldKowloon";
 import { player } from "../state/player";
+import { isTypingInField } from "../ui/inputMode";
 import { createDamageNumbers } from "../vfx/damageNumbers";
 import { postSurvivalSettle } from "../net/economy";
 import { setupSkillBar, buildFreud, type HeroHandle, type HeroVoice, type SkillBarHandle, type Mats } from "../scenes/villageHub";
@@ -39,6 +40,12 @@ import { createSurvivalHud, openResults, type RunSettlement } from "./hud";
 import { createAnnouncer } from "./announcer";
 import { createSurvivalSfx } from "./sfx";
 import { createSurvivalMusic } from "./music";
+
+/** Survival's reach for "every enemy" skills and ground zones (the server clamps to the same). */
+const SURVIVAL_AOE_MAX_M = 8;
+/** Ultimates tick as zones: 6 ticks, 0.75 s apart (first at once). */
+const ULT_ZONE_TICKS = 6;
+const ULT_ZONE_PERIOD_S = 0.75;
 
 export interface SurvivalRun {
   /** Movement clamp hook: sim slows/pins, then the map push-out the scene already does. */
@@ -114,7 +121,13 @@ export async function startSurvivalRun(opts: {
   let tickSecond = -1;
   let mapT = 0;
   const bossSquare = OLD_KOWLOON.squares.find((q) => q.role === "boss");
-  const dmg = typeof document === "undefined" ? null : createDamageNumbers(scene);
+  // AoE and DoT ticks put many numbers up at once: a larger cap than the boss fight's.
+  const dmg = typeof document === "undefined" ? null : createDamageNumbers(scene, { maxLive: 48 });
+  /** A number's anchor that walks with its monster (party frames replace the objects, so look up by id). */
+  const followHostile = (id: number) => () => {
+    const h = sim.hostiles.find((x) => x.id === id);
+    return h ? view.aimPoint(h) : null;
+  };
   const meP = sim.player(me)!;
   player.setVitals(meP.hpMax);
 
@@ -127,9 +140,20 @@ export async function startSurvivalRun(opts: {
       out.hits.push({ target: id, amount, crit, ...cast });
       return 0; // the server's hitHostile event carries the real number
     },
-    area(x: number, z: number, r: number, amount: number, cast: Cast): void {
-      if (!party) { sim.hitArea(x, z, r, amount, false, cast); return; }
-      out.hits.push({ area: true, x, z, r, amount, ...cast });
+    /** Area hit; returns the hostiles it struck (party: as this client sees them). */
+    area(x: number, z: number, r: number, amount: number, crit: boolean, cast: Cast): number[] {
+      if (!party) return sim.hitArea(x, z, r, amount, crit, cast);
+      out.hits.push({ area: true, x, z, r, amount, crit, ...cast });
+      return sim.hostiles.filter((h) => h.state !== "dead" && (h.x - x) ** 2 + (h.z - z) ** 2 <= (r + h.radius) ** 2).map((h) => h.id);
+    },
+    /** A damage zone on the ground: `total` per hostile inside, in ticks. */
+    zone(x: number, z: number, r: number, total: number, ticks: number, periodS: number, cast: Cast, now = false): void {
+      if (!party) { sim.addZone(x, z, r, total, ticks, periodS, cast, now); return; }
+      out.hits.push({ zone: true, x, z, r, amount: total, ticks, periodS, now, ...cast });
+    },
+    dot(id: number, total: number, ticks: number, periodS: number, cast: Cast): void {
+      if (!party) { sim.addDot(id, total, ticks, periodS, cast); return; }
+      out.hits.push({ dot: true, target: id, amount: total, ticks, periodS, ...cast });
     },
     heal(n: number): void { if (!party) sim.healPlayer(me, n); else out.heal += n; },
     mitigate(): void { if (!party) sim.setMitigation(me, 0.35, 4); else out.mitigation = true; },
@@ -152,7 +176,6 @@ export async function startSurvivalRun(opts: {
   let beat = 0;
   let beatT = 0;
   let bar: SkillBarHandle | null = null;
-  let lastUlt: { x: number; z: number; until: number } | null = null;
   const fight = new BossFight(TRAINING_DUMMY, kit, [], {
     announce: () => {},
     setBossPhase: () => {},
@@ -170,10 +193,9 @@ export async function startSurvivalRun(opts: {
       player.applyBuff({ id: `survival.${id ?? icon ?? name}`, name, durationMs, kind: kind ?? "buff", desc });
     },
     gainFocus: (n) => queueMicrotask(() => player.restoreMana(n)),
-    // The ultimate pays its Mark payload in ticks: they land around where it was cast.
-    dotTick: (_label, amount) => {
-      if (lastUlt && performance.now() < lastUlt.until) act.area(lastUlt.x, lastUlt.z, 6, amount, { player: me, slotId: `${kit.id}.ultimate`, kind: "ultimate" });
-    },
+    // Ticks against the dummy are only the pricing run's echo: survival's own
+    // zones and DoTs (sim.addZone / addDot) pay the real ones, on real monsters.
+    dotTick: () => {},
     lockPaletteSlot: (i, ms) => {
       const id = bar?.paletteIds[i];
       if (id) bar?.lockSlot(id, ms);
@@ -206,8 +228,10 @@ export async function startSurvivalRun(opts: {
         const at = tgt ? { x: tgt.x, z: tgt.z } : { x: meP.x, z: meP.z };
         land(() => {
           const total = fight.castUltimate();
-          lastUlt = { ...at, until: performance.now() + 6000 };
-          act.area(at.x, at.z, 6, total, { player: me, slotId: slot.id, kind: "ultimate" });
+          // A zone, not one slab: the payload ticks for ~4 s on everything
+          // inside, monsters that walk in late included.
+          act.zone(at.x, at.z, Math.min(SURVIVAL_AOE_MAX_M, kit.ultimate.zoneRadius ?? 6), total, ULT_ZONE_TICKS, ULT_ZONE_PERIOD_S,
+            { player: me, slotId: slot.id, kind: "ultimate" }, true);
         });
         return;
       }
@@ -235,11 +259,21 @@ export async function startSurvivalRun(opts: {
         const priced = fight.landHit(hit);
         const h = sim.hostiles.find((x) => x.id === id);
         if (!h) return;
-        const dealt = act.hit(id, priced, hit.crit, { player: me, slotId: slot.id, kind: slot.kind, answersTag, consequence });
-        if (dealt > 0) dmg?.spawn(view.aimPoint(h), dealt, hit.crit, "damage");
+        const cast = { player: me, slotId: slot.id, kind: slot.kind, answersTag, consequence };
+        // Area skills reach everything around the target (map-wide ones too, within reason).
+        const r = hit.aoeRadius ? Math.min(SURVIVAL_AOE_MAX_M, hit.aoeRadius) : 0;
+        const struck = r > 0 ? act.area(h.x, h.z, r, priced, hit.crit, cast) : (act.hit(id, priced, hit.crit, cast), [id]);
+        const ot = hit.overTime;
+        if (ot) {
+          // The dummy priced the impact part; the same ratio prices the ticks.
+          const total = ot.total * (hit.damage > 0 ? priced / hit.damage : 1);
+          if (ot.zoneRadius) act.zone(h.x, h.z, Math.min(SURVIVAL_AOE_MAX_M, ot.zoneRadius), total, ot.ticks, ot.periodS, cast);
+          else for (const sid of struck) act.dot(sid, total, ot.ticks, ot.periodS, cast);
+        }
       });
     },
   }, kit);
+  hud.dockDash(kit.psychosocial !== undefined);
   const operant = fight.operant;
   if (operant) bar?.setOperant(operant);
 
@@ -255,8 +289,16 @@ export async function startSurvivalRun(opts: {
     dashT = 0.18;
   };
   hud.onDash(doDash);
-  const onKey = (e: KeyboardEvent) => { if (e.key.toLowerCase() === "q" && !e.repeat) doDash(); };
-  window.addEventListener("keydown", onKey);
+  // Space dashes on a keyboard (Q stays the palette cycle it is everywhere else).
+  // Capture phase on window runs before the hero controller's own Space (jump)
+  // handler, and stopping it there means a dash never also hops.
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key !== " " || isTypingInField()) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (!e.repeat) doDash();
+  };
+  window.addEventListener("keydown", onKey, { capture: true });
 
   // ---- events ---------------------------------------------------------------------
   let ended = false;
@@ -279,10 +321,15 @@ export async function startSurvivalRun(opts: {
         case "boss": bossId = e.id; bossName = e.name; hud.banner(e.name, 3000); sfx.play("boss_roar"); break; // her theory card toasts via "card"
         case "bossNotch": sfx.play("boss_roar"); break;
         case "hitHostile": {
-          if (e.defended) sfx.play("hit_defended"); else if (e.amount > 0) sfx.play("hit");
-          // Party: every number comes from the server (solo shows its own at land time).
-          const h = party && e.amount > 0 ? sim.hostiles.find((x) => x.id === e.id) : null;
-          if (h) dmg?.spawn(view.aimPoint(h), e.amount, e.crit, "damage");
+          // Ticks stay quiet: a zone on ten monsters would be ten hit sounds a second.
+          if (!e.dot) { if (e.defended) sfx.play("hit_defended"); else if (e.amount > 0) sfx.play("hit"); }
+          // Every number comes from the sim's own event (solo and party alike), so
+          // AoE and DoT ticks float over each monster they land on, and follow it.
+          const h = e.amount > 0 ? sim.hostiles.find((x) => x.id === e.id) : null;
+          if (h) {
+            if (e.dot) dmg?.spawnDot(view.aimPoint(h), e.amount, "", followHostile(e.id));
+            else dmg?.spawn(view.aimPoint(h), e.amount, e.crit, "damage", followHostile(e.id));
+          }
           break;
         }
         case "die": sfx.play(e.kind === "minion" ? "die_minion" : "die_elite"); break;
@@ -318,7 +365,21 @@ export async function startSurvivalRun(opts: {
           dmg?.spawn(at, e.amount, false, "taken");
           break;
         }
-        case "pickup": if (e.player !== me) break; if (e.focus) player.restoreMana(e.focus); sfx.play(e.focus ? "pickup_focus" : "pickup_hp"); break;
+        case "pickup": {
+          if (e.player !== me) break;
+          const at = hero.node.position.clone();
+          at.y += 2.1;
+          if (e.focus) {
+            // What it actually filled: a full pool takes nothing.
+            const filled = Math.min(e.focus, Math.max(0, player.manaMax - player.mana));
+            player.restoreMana(e.focus);
+            dmg?.spawnGain(at, filled > 0 ? `+${Math.round(filled)} Focus` : "Focus full", "focus");
+          } else {
+            dmg?.spawnGain(at, e.heal >= 1 ? `+${Math.round(e.heal)} HP` : "HP full", "heal");
+          }
+          sfx.play(e.focus ? "pickup_focus" : "pickup_hp");
+          break;
+        }
         case "playerDown": hud.banner(e.player === me ? "Down… an ally can Reach Out" : `${nameOf(e.player)} is down — stand beside them`, 2200); break;
         case "revive": hud.banner(e.player === me ? "Back on your feet" : `${nameOf(e.player)} is back`, 1800); break;
         case "teleport": if (e.player === me) { hero.node.position.x = e.x; hero.node.position.z = e.z; } break;
@@ -373,6 +434,7 @@ export async function startSurvivalRun(opts: {
     sim.hazards = f.hazards as typeof sim.hazards;
     sim.projectiles = f.projectiles as typeof sim.projectiles;
     sim.pickups = f.pickups as typeof sim.pickups;
+    sim.zones = (f.zones ?? []) as typeof sim.zones;
     const r = f.recall as null | { question: string; answers: string[]; circles: Array<{ x: number; z: number; r: number }>; t: number; total: number };
     sim.recall = r ? { item: { id: "", source: "", question: r.question, answers: ["", "", "", ""], explain: "" }, answers: r.answers, correct: -1, circles: r.circles, t: r.t, total: r.total } : null;
     for (const fp of f.players) {
@@ -503,7 +565,7 @@ export async function startSurvivalRun(opts: {
       player.setPools(Math.max(0, meP.hp), meP.hpMax, player.mana, player.manaMax);
     },
     dispose() {
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, { capture: true });
       window.removeEventListener("psy:survival", onNet);
       // Leaving a party run mid-way: tell the server so the others are not held.
       if (party && !ended) void fetch("/api/survival/leave", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});

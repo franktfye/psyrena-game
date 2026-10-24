@@ -17,7 +17,7 @@ import {
   MINION_HIT, ELITE_HIT, ELITE_RULES, BOSS_RULES, PICKUPS, RECOVERY, BOONS,
   type DifficultyId, type MinionDef, type BossDef, type BoonId, type BossId, type HeroKitId, type QuizItem,
 } from "./content.ts";
-import { buildWalkGrid, solidBoxes, pushOut, flowField, flowStep, snapToWalkable, cellOf, CELL, type MapDef, type Rect, type WalkGrid } from "./map/layout.ts";
+import { buildWalkGrid, inflateGrid, solidBoxes, pushOut, flowField, flowStep, snapToWalkable, cellOf, CELL, type MapDef, type Rect, type WalkGrid } from "./map/layout.ts";
 import { rng } from "./map/lots.ts";
 
 export const HERO_HP = 1000;
@@ -122,6 +122,17 @@ export interface Hostile {
   lifeLeft?: number;
   /** Priming boon: this enemy has already taken its first hit. */
   primed?: boolean;
+  /** Damage-over-time trains on it (heroes' skills). */
+  dots?: Dot[];
+  /** Party frames: the server says "a DoT rides it" without sending the trains. */
+  dotted?: boolean;
+  /** Headway tracking for the unstick sidestep (see `move`). */
+  progT?: number;
+  progD?: number;
+  unstickT?: number;
+  unstickSide?: number;
+  /** Moved by crowd separation this tick (re-checked against walls). */
+  shoved?: boolean;
 }
 
 export interface Hazard {
@@ -159,6 +170,29 @@ export const HAZARD_NOTES: Record<string, string> = {
   slam: "Slam: get out of the circle before it fills.",
 };
 
+/**
+ * A hero's damage zone on the ground (an ultimate, Free Association): every
+ * tick lands on whatever stands inside right then, so late arrivals are hit.
+ */
+export interface DamageZone {
+  id: number;
+  player: string;
+  x: number;
+  z: number;
+  r: number;
+  perTick: number;
+  periodS: number;
+  nextAt: number;
+  ticksLeft: number;
+  total: number;
+  cast: HitCast;
+}
+
+/** A damage-over-time train riding one hostile. */
+export interface Dot { player: string; perTick: number; periodS: number; nextAt: number; ticksLeft: number; cast: HitCast }
+
+export interface HitCast { player: string; slotId: string; kind: string; answersTag?: string; consequence?: string }
+
 export interface Projectile { id: number; x: number; z: number; vx: number; vz: number; r: number; pct: number; life: number }
 
 export interface Pickup { id: number; kind: "hp" | "focus" | "bigHp" | "bigFocus"; x: number; z: number; life: number }
@@ -178,7 +212,7 @@ export type SimEvent =
   | { type: "spawn"; id: number }
   | { type: "die"; id: number; kind: HostileKind; def: string }
   | { type: "hitPlayer"; player: string; amount: number; source: string }
-  | { type: "hitHostile"; id: number; amount: number; crit: boolean; defended: boolean }
+  | { type: "hitHostile"; id: number; amount: number; crit: boolean; defended: boolean; dot?: boolean; player?: string }
   | { type: "telegraph"; id: number }
   | { type: "note"; key: string }
   | { type: "gates"; closed: boolean }
@@ -236,6 +270,7 @@ export class SurvivalSim {
   hazards: Hazard[] = [];
   projectiles: Projectile[] = [];
   pickups: Pickup[] = [];
+  zones: DamageZone[] = [];
   recall: RecallState | null = null;
   events: SimEvent[] = [];
 
@@ -245,8 +280,15 @@ export class SurvivalSim {
   private phaseT = 0;
   private rand: () => number;
   private nextId = 1;
-  /** One flow field per living player, so a monster's detour leads to ITS target. */
+  /**
+   * One flow field per living player, so a monster's detour leads to ITS
+   * target — and per body size: elites and bosses path on an inflated grid
+   * (`inflateGrid`) so they keep clear of walls and banyans instead of jamming.
+   */
   private fields = new Map<string, Uint16Array>();
+  private wideFields = new Map<string, Uint16Array>();
+  private wideOpen: WalkGrid;
+  private wideShut: WalkGrid;
   private fieldT = 0;
   private toSpawn = 0;
   private elitesToSpawn = 0;
@@ -280,6 +322,8 @@ export class SurvivalSim {
     // the same map with those cells solid, so pathing knows the way is closed.
     this.gateBoxes = opts.map.bossGates.map((g) => ({ ...g, open: { x0: true, x1: true, z0: true, z1: true } }));
     this.gridShut = buildWalkGrid({ ...opts.map, obstacles: [...opts.map.obstacles, ...opts.map.bossGates.map((g, i) => ({ ...g, name: `gate${i}` }))] });
+    this.wideOpen = inflateGrid(this.gridOpen, 1);
+    this.wideShut = inflateGrid(this.gridShut, 1);
     this.rand = rng(opts.seed ?? 4242);
     this.jackpotBonus = opts.jackpotBonus ?? 0;
     const n = Math.max(1, Math.min(3, opts.players.length));
@@ -416,16 +460,17 @@ export class SurvivalSim {
    * Apply a priced hero hit to a hostile. `slotId` and `ctx` let the elite
    * debuffs fire (§4.3). Returns the damage actually dealt.
    */
-  hitHostile(id: number, amount: number, crit: boolean, cast: { player: string; slotId: string; kind: string; answersTag?: string; consequence?: string }): number {
+  hitHostile(id: number, amount: number, crit: boolean, cast: HitCast, tick = false): number {
     const h = this.hostiles.find((x) => x.id === id);
     if (!h || h.state === "dead") return 0;
-    if (h.kind === "elite") this.kitEffect(h, cast);
-    if (h.kind === "boss" && this.players.some((p) => this.t < p.pinnedUntil)) {
+    // A tick is the same cast landing again: it must not re-fire elite debuffs or Hag pin breaks.
+    if (h.kind === "elite" && !tick) this.kitEffect(h, cast);
+    if (!tick && h.kind === "boss" && this.players.some((p) => this.t < p.pinnedUntil)) {
       h.pinHits = (h.pinHits ?? 0) + 1;
       if (h.pinHits >= 3) for (const p of this.players) p.pinnedUntil = 0;
     }
     if (h.invulnerable) {
-      this.events.push({ type: "hitHostile", id, amount: 0, crit, defended: true });
+      this.events.push({ type: "hitHostile", id, amount: 0, crit, defended: true, dot: tick || undefined, player: cast.player });
       return 0;
     }
     let mult = 1;
@@ -458,20 +503,59 @@ export class SurvivalSim {
       h.lastHit = caster.id;
     }
     h.hp -= dealt;
-    this.events.push({ type: "hitHostile", id, amount: dealt, crit, defended });
+    this.events.push({ type: "hitHostile", id, amount: dealt, crit, defended, dot: tick || undefined, player: cast.player });
     if (h.hp <= 0) this.kill(h);
     else if (h.kind === "boss") this.bossNotches(h);
     return dealt;
   }
 
-  /** Area hit (ultimates): every hostile within r of (x, z). */
-  hitArea(x: number, z: number, r: number, amount: number, crit: boolean, cast: { player: string; slotId: string; kind: string }): number {
-    let total = 0;
+  /** Area hit: every hostile within r of (x, z). Returns the ids struck. */
+  hitArea(x: number, z: number, r: number, amount: number, crit: boolean, cast: HitCast, tick = false): number[] {
+    const struck: number[] = [];
     for (const h of [...this.hostiles]) {
-      if (h.state === "dead") continue;
-      if ((h.x - x) ** 2 + (h.z - z) ** 2 <= (r + h.radius) ** 2) total += this.hitHostile(h.id, amount, crit, cast);
+      if (h.state === "dead" || h.twinOf !== undefined && tick) continue;
+      if ((h.x - x) ** 2 + (h.z - z) ** 2 <= (r + h.radius) ** 2) { this.hitHostile(h.id, amount, crit, cast, tick); struck.push(h.id); }
     }
-    return total;
+    return struck;
+  }
+
+  /**
+   * Drop a damage zone: `total` damage per hostile that stays inside, paid in
+   * `ticks` ticks every `periodS`. The first tick lands one period from now
+   * (the cast's impact already hit), or at once with `firstNow` (ultimates).
+   */
+  addZone(x: number, z: number, r: number, total: number, ticks: number, periodS: number, cast: HitCast, firstNow = false): void {
+    if (total <= 0 || ticks <= 0) return;
+    this.zones.push({ id: this.nextId++, player: cast.player, x, z, r, perTick: total / ticks, periodS, nextAt: this.t + (firstNow ? 0 : periodS), ticksLeft: ticks, total, cast });
+  }
+
+  /** Put a damage-over-time train on one hostile. */
+  addDot(id: number, total: number, ticks: number, periodS: number, cast: HitCast): void {
+    const h = this.hostiles.find((x) => x.id === id);
+    if (!h || h.state === "dead" || total <= 0 || ticks <= 0) return;
+    (h.dots ??= []).push({ player: cast.player, perTick: total / ticks, periodS, nextAt: this.t + periodS, ticksLeft: ticks, cast });
+  }
+
+  private tickZonesAndDots(): void {
+    for (const zn of this.zones) {
+      while (zn.ticksLeft > 0 && this.t >= zn.nextAt) {
+        this.hitArea(zn.x, zn.z, zn.r, zn.perTick, false, zn.cast, true);
+        zn.ticksLeft--;
+        zn.nextAt += zn.periodS;
+      }
+    }
+    this.zones = this.zones.filter((z) => z.ticksLeft > 0);
+    for (const h of [...this.hostiles]) {
+      if (!h.dots?.length) continue;
+      for (const d of h.dots) {
+        while (d.ticksLeft > 0 && this.t >= d.nextAt && h.state !== "dead") {
+          this.hitHostile(h.id, d.perTick, false, d.cast, true);
+          d.ticksLeft--;
+          d.nextAt += d.periodS;
+        }
+      }
+      h.dots = h.dots.filter((d) => d.ticksLeft > 0);
+    }
   }
 
   /** Nearest damageable hostile to (x, z) within `maxD`, preferring elites/bosses at equal-ish range. */
@@ -501,11 +585,20 @@ export class SurvivalSim {
     this.fieldT -= dt;
     if (this.fieldT <= 0) {
       this.fields.clear();
-      for (const p of this.players) if (p.alive) this.fields.set(p.id, flowField(this.grid, [p]));
+      this.wideFields.clear();
+      const wide = this.wideGrid();
+      const anyWide = this.hostiles.some((h) => h.state !== "dead" && h.radius > 0.5);
+      for (const p of this.players) {
+        if (!p.alive) continue;
+        this.fields.set(p.id, flowField(this.grid, [p]));
+        // A hero hugging a wall stands on a cell the wide grid closed: seed from the nearest open one.
+        if (anyWide) this.wideFields.set(p.id, flowField(wide, [snapToWalkable(wide, p.x, p.z)]));
+      }
       this.fieldT = 0.5;
     }
     for (const h of this.hostiles) if (h.state !== "dead") this.tickHostile(h, dt);
     this.separate();
+    this.tickZonesAndDots();
     this.tickHazards(dt);
     this.tickProjectiles(dt);
     this.tickPickups(dt);
@@ -780,13 +873,21 @@ export class SurvivalSim {
     return near;
   }
 
-  /** True when the walk grid is open along the straight line from a to b (sampled every half cell). */
-  private lineClear(ax: number, az: number, bx: number, bz: number): boolean {
+  private wideGrid(): WalkGrid { return this.gatesClosed ? this.wideShut : this.wideOpen; }
+
+  /**
+   * True when the walk grid is open along the straight line from a to b
+   * (sampled every half cell). `grid` defaults to the plain one; wide bodies
+   * test their inflated grid, i.e. a corridor a body wide. The last two metres
+   * are not tested — that is the hero's own spot, which may hug a wall.
+   */
+  private lineClear(ax: number, az: number, bx: number, bz: number, grid = this.grid, skipEnd = 0): boolean {
     const d = Math.hypot(bx - ax, bz - az);
     const steps = Math.ceil(d / (CELL * 0.5));
-    for (let i = 1; i < steps; i++) {
+    const last = Math.max(1, Math.floor(steps * Math.max(0, 1 - skipEnd / Math.max(d, 1e-6))));
+    for (let i = 1; i < Math.min(steps, last + 1); i++) {
       const k = i / steps;
-      if (!this.grid.walk[cellOf(this.grid, ax + (bx - ax) * k, az + (bz - az) * k)]) return false;
+      if (!grid.walk[cellOf(grid, ax + (bx - ax) * k, az + (bz - az) * k)]) return false;
     }
     return true;
   }
@@ -832,10 +933,20 @@ export class SurvivalSim {
     // Straight at the hero whenever the street between is open; the grid path
     // only to get round buildings (its 8-way steps read as sidling up the road).
     let dir = { x: (tgt.x - h.x) / dist, z: (tgt.z - h.z) / dist };
-    const field = this.fields.get(tgt.id);
-    if (dist >= 4 && field && !this.lineClear(h.x, h.z, tgt.x, tgt.z)) {
-      const f = flowStep(this.grid, field, h.x, h.z);
+    const wide = h.radius > 0.5;
+    const grid = wide ? this.wideGrid() : this.grid;
+    const field = (wide ? this.wideFields : this.fields).get(tgt.id);
+    if (dist >= 4 && field && !this.lineClear(h.x, h.z, tgt.x, tgt.z, grid, wide ? 2 : 0)) {
+      const f = flowStep(grid, field, h.x, h.z);
       if (f.x || f.z) dir = f;
+    }
+    // Unstick: a body that has made no headway for a second sidesteps for a moment.
+    if ((h.unstickT ?? 0) > 0) {
+      h.unstickT! -= dt;
+      const s = h.unstickSide ?? 1;
+      dir = { x: dir.x * 0.3 - dir.z * s, z: dir.z * 0.3 + dir.x * s };
+      const l = Math.hypot(dir.x, dir.z) || 1;
+      dir = { x: dir.x / l, z: dir.z / l };
     }
     // Ease the heading round so a turn is an arc, not a snap.
     const k = Math.min(1, dt * 6);
@@ -846,8 +957,20 @@ export class SurvivalSim {
     h.mvx = mx; h.mvz = mz;
     const q = { x: h.x + mx * speed * dt, z: h.z + mz * speed * dt };
     pushOut(q, h.radius, this.solids(), this.map.half);
+    const made = Math.hypot(q.x - h.x, q.z - h.z);
     h.x = q.x;
     h.z = q.z;
+    // Headway check, per second of walking: under a quarter of its pace means it is jammed.
+    h.progT = (h.progT ?? 0) + dt;
+    h.progD = (h.progD ?? 0) + made;
+    if (h.progT >= 1) {
+      if (h.progD < 0.25 * speed * h.progT && (h.unstickT ?? 0) <= 0) {
+        h.unstickT = 0.7;
+        h.unstickSide = -(h.unstickSide ?? -1);
+      }
+      h.progT = 0;
+      h.progD = 0;
+    }
   }
 
   private melee(h: Hostile, tgt: SimPlayer, dist: number, dt: number, spec: { pct: number; windup: number; cooldown: number; reach: number }, label: string): void {
@@ -1232,14 +1355,19 @@ export class SurvivalSim {
         const reach = PICKUPS.magnet + 2 * this.boon(p, "chunking");
         if (d2 < reach * reach) {
           // Magnetised: drift toward the player, collect on contact.
-          const d = Math.sqrt(d2) || 1;
-          pk.x += ((p.x - pk.x) / d) * Math.min(d, 8 * dt);
-          pk.z += ((p.z - pk.z) / d) * Math.min(d, 8 * dt);
+          // (Exactly on top of the hero is distance 0, collected at once: `|| 1` here once made it never land.)
+          const d = Math.sqrt(d2);
+          if (d > 1e-6) {
+            pk.x += ((p.x - pk.x) / d) * Math.min(d, 8 * dt);
+            pk.z += ((p.z - pk.z) / d) * Math.min(d, 8 * dt);
+          }
           if (d < 0.6) {
             const heal = pk.kind === "hp" ? PICKUPS.hpOrbPct * p.hpMax : pk.kind === "bigHp" ? PICKUPS.largeHpPct * p.hpMax * (1 + 0.5 * this.boon(p, "spacing")) : 0;
             const focus = pk.kind === "focus" ? PICKUPS.focusOrb : pk.kind === "bigFocus" ? PICKUPS.largeFocus : 0;
+            const before = p.hp;
             p.hp = Math.min(p.hpMax, p.hp + heal);
-            this.events.push({ type: "pickup", player: p.id, kind: pk.kind, focus, heal });
+            // `heal` is what it actually restored (0 at full HP): the client floats that number.
+            this.events.push({ type: "pickup", player: p.id, kind: pk.kind, focus, heal: p.hp - before });
             pk.life = 0;
             break;
           }
@@ -1390,7 +1518,16 @@ export class SurvivalSim {
         a.z -= dz * push * wa * (wb ? 1 : 2);
         b.x += dx * push * wb * (wa ? 1 : 2);
         b.z += dz * push * wb * (wa ? 1 : 2);
+        a.shoved = true;
+        b.shoved = true;
       }
+    }
+    // A crowd must not shove anyone into a wall or a banyan.
+    const solids = this.solids();
+    for (const h of hs) {
+      if (!h.shoved) continue;
+      h.shoved = false;
+      pushOut(h, h.radius, solids, this.map.half);
     }
   }
 
