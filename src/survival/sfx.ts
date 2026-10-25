@@ -1,7 +1,8 @@
 /**
  * Dream Siege sound effects (public/assets/survival/sfx, made with Stable
  * Audio Open: tools/gen-survival-sfx.py + tools/ship-survival-sfx.sh; the
- * monster and hit sounds are voiced with VoxCPM2: tools/gen-survival-vox-sfx.sh).
+ * monster deaths, roar and the defended hit are voiced with VoxCPM2:
+ * tools/gen-survival-vox-sfx.sh).
  *
  * Web Audio rather than the game's `new Audio()` per play (src/state/sfx.ts):
  * a 24-monster crowd fires hits many times a second, so every sound is decoded
