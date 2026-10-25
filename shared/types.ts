@@ -52,7 +52,8 @@ export type MarkType =
   | "flow"
   | "reframe"
   | "bond"
-  | "reinforcement";
+  | "reinforcement"
+  | "modeling";
 
 /** Kit archetype — see `02-combat-system.md`. Chain kits are the on-ramp. */
 export type KitArchetype = "palette" | "chain";
@@ -70,6 +71,13 @@ export interface Effect {
    */
   requiresSelfState?: string;
   target?: "self" | "ally" | "team" | "boss";
+  /**
+   * Display name and buff-tile icon for an effect whose generic kind needs
+   * the skill's own words — a `team.amp` is Ainsworth's "Exploration" but
+   * Bandura's "Reciprocal Determinism". Omit for the kind's default.
+   */
+  label?: string;
+  icon?: string;
 }
 
 /**
@@ -165,6 +173,14 @@ export interface PaletteEntry {
    */
   answersAxis?: PhaseAxis;
   answersTag?: string; // "age.infant" — server compares to the boss's live phase
+  /**
+   * Several tags this entry answers, when one button covers more than one
+   * form. Piaget's Preoperational stage spans ages 2 to 7, which NIGHTMARE
+   * shows as two forms (toddler and child), so his four stages answer five
+   * forms. When present the sim matches the live form's tag against this
+   * list instead of the button's position (`answersTag` stays for display).
+   */
+  answersTags?: string[];
   base: number;
   markType: MarkType;
   /**
@@ -250,6 +266,42 @@ export interface ThreatStance {
    * a timer, which nothing uses yet.
    */
   toggle: boolean;
+}
+
+/**
+ * Piaget's stages as a sequence the sim watches — the shape of
+ * `PIAGET_DEVELOPMENT` in shared/heroes/piaget.ts, which documents the price.
+ * The palette's entries ARE the stages, in order; this only says what
+ * completing them in order is worth.
+ */
+export interface DevelopmentSpec {
+  /** Focus refunded when the last stage lands right after the first three, in order. */
+  sequenceFocusRefund: number;
+  /** A run lapses if the next stage does not follow within this many ms. */
+  stepWindowMs: number;
+}
+
+/**
+ * Bandura's observational learning, as data — `BANDURA_MODELING` in
+ * shared/heroes/bandura.ts documents every number. The four processes map to
+ * the engine: ATTENTION picks the model (the most salient teammate, or the
+ * one the player taps), RETENTION fills the palette slots with the model's
+ * casts, REPRODUCTION is pressing a slot, MOTIVATION is the multiplier a
+ * reproduction pays (full when the model's original was rewarded).
+ */
+export interface ModelingSpec {
+  /** Retention slots — the palette keys that hold copies. */
+  slots: number;
+  /** Multiplier on a copy whose original was NOT reinforced. */
+  unmotivatedMult: number;
+  /** Multiplier on a copy whose original was reinforced (crit, right answer). */
+  motivatedMult: number;
+  /** Pressing an empty slot: rehearsal, at this fraction. Never a dead key. */
+  emptyMult: number;
+  /** Salience decays with this half-life, so attention follows who is doing well NOW. */
+  salienceHalfLifeS: number;
+  /** A retained copy fades after this long unrehearsed. */
+  retentionMs: number;
 }
 
 /** One quality tier of a bell↔food pairing — see `ConditioningSpec.pairing`. */
@@ -445,6 +497,17 @@ export interface Hero {
    * again: the sim reads it off the hero.
    */
   psychosocial?: PsychosocialSpec;
+  /**
+   * Piaget's invariant sequence, if this hero runs one: the four stage keys
+   * cast IN ORDER refund Focus (shared/heroes/piaget.ts). Same data-not-code
+   * pattern as `psychosocial`.
+   */
+  development?: DevelopmentSpec;
+  /**
+   * Bandura's observational-learning engine, if this hero runs one: watch a
+   * model, retain their skills, reproduce them (shared/heroes/bandura.ts).
+   */
+  modeling?: ModelingSpec;
   /**
    * Empirical standing of the underlying theory, surfaced in-game.
    *

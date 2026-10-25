@@ -11,55 +11,52 @@ import { GlowLayer } from "@babylonjs/core/Layers/glowLayer";
 import { vfxGlowOptions } from "../core/quality";
 
 import "@babylonjs/core/Meshes/Builders/discBuilder";
-import "@babylonjs/core/Meshes/Builders/sphereBuilder";
-import "@babylonjs/core/Meshes/Builders/cylinderBuilder";
 import "@babylonjs/core/Meshes/Builders/torusBuilder";
 import "@babylonjs/core/Meshes/Builders/planeBuilder";
 import "@babylonjs/core/Meshes/Builders/boxBuilder";
+import "@babylonjs/core/Meshes/Builders/tubeBuilder";
+import "@babylonjs/core/Meshes/Builders/ribbonBuilder";
 
 import { AINSWORTH } from "@shared/heroes/ainsworth";
 
 import type { FreudCastKind, FreudSkillVfx } from "./freudCasts";
 
 /**
- * Ainsworth's cast VFX: attachment, drawn around her. Pure Babylon (meshes,
- * two DynamicTexture bakes, one particle system, no assets), in her colours,
- * which match her icons (tools/gen-ainsworth-assets.sh): CYAN heart-shield,
- * TEAL cardigan, GOLD piping, and one hue per attachment style.
+ * Ainsworth's cast VFX — attachment made visible as ribbons, distance and
+ * repair. Broad procedural strips and fine bonded seams give each cast a clear
+ * silhouette without relying on translucent spheres or domes. Emissive levels
+ * and the included-only glow layer are deliberately restrained.
  *
- *  - Secure (1):            two ROSE arcs close round her like an embrace,
- *                           then a ring sweeps outward: the team let go to
- *                           explore.
- *  - Avoidant (2):          a cool STEEL shell closes over her, turned away;
- *                           inside it a heartbeat ring flickers (the calm is
- *                           only on the outside).
- *  - Ambivalent (3):        CORAL, twice: a ring pulls in to her, then a
- *                           shockwave pushes out. Cling, push.
- *  - Disorganized (4):      VIOLET glitch panes freeze round her, then a wide
- *                           VIOLET-CYAN dome bursts over the team and holds
- *                           for the immunity.
- *  - Safe Haven (E):        a CYAN heart-in-shield glyph on the ground under a
- *                           dome, for the whole mitigation window.
- *  - Strange Situation (R): a GOLD doorway rises behind her; she steps away
- *                           and back (the door swings), and a reveal ring
- *                           sweeps out from the threshold.
- *  - Earned Security (F):   a cracked heart rises over her head, its cracks
- *                           fill with GOLD until it shines whole, then a
- *                           radiant wave washes over the team.
+ *  - Secure (1):            paired rose ribbons meet in an embrace, hold, then
+ *                           open into a wide release bond: closeness with room
+ *                           to explore.
+ *  - Avoidant (2):          two steel arcs remain conspicuously separated;
+ *                           a small, measured double heartbeat sits between.
+ *  - Ambivalent (3):        unequal coral ribbons alternate an urgent inward
+ *                           pull with an abrupt outward push.
+ *  - Disorganized (4):      broken violet strips snap into alignment and are
+ *                           rewoven with cyan into an open shelter for the
+ *                           entire team-immunity window.
+ *  - Safe Haven (E):        a cyan ribbed canopy and quiet ground bond protect
+ *                           her for the entire mitigation window.
+ *  - Strange Situation (R): a luminous threshold appears; a separation ribbon
+ *                           travels out and a rose-gold reunion arc returns.
+ *  - Earned Security (F):   a rose heart is repaired by gold kintsugi seams,
+ *                           then paired gold bonds carry the wave outward.
  *
- * Loaded on demand (heroCasts.ts), so none of this is in the boot chunk. Same
- * lifecycle contract as the other hero modules: built once, re-armed per
- * cast, one onBeforeRenderObservable, every effect self-disables, shaders
- * compiled up front, glow only on tiers that allow it (core/quality.ts).
+ * Loaded on demand by heroCasts.ts. One factory, one render observer, no
+ * external assets. Roots self-disable, every material is precompiled, and glow
+ * is created only when vfxGlowOptions() permits it.
  */
 
-const CYAN = new Color3(0.36, 0.92, 1.0);
-const TEAL = new Color3(0.16, 0.7, 0.72);
-const GOLD = new Color3(1.0, 0.82, 0.34);
-const ROSE = new Color3(1.0, 0.48, 0.62);
-const STEEL = new Color3(0.62, 0.74, 0.88);
-const CORAL = new Color3(1.0, 0.42, 0.28);
-const VIOLET = new Color3(0.66, 0.42, 1.0);
+const CYAN = new Color3(0.3, 0.86, 0.96);
+const TEAL = new Color3(0.14, 0.64, 0.68);
+const GOLD = new Color3(1.0, 0.78, 0.3);
+const ROSE = new Color3(1.0, 0.4, 0.58);
+const STEEL = new Color3(0.55, 0.68, 0.82);
+const CORAL = new Color3(1.0, 0.36, 0.24);
+const VIOLET = new Color3(0.6, 0.36, 0.94);
+const TAU = Math.PI * 2;
 
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
 const sstep = (e0: number, e1: number, x: number): number => {
@@ -71,14 +68,13 @@ const outBack = (u: number): number => {
   const v = u - 1;
   return 1 + (c + 1) * v * v * v + c * v * v;
 };
-/** 0 → 1 → 0 over [a, b], ramps of `edge`. */
 const pulse = (u: number, a: number, b: number, edge: number): number =>
   sstep(a, a + edge, u) * (1 - sstep(b - edge, b, u));
 
 function fxMat(scene: Scene, name: string, tint: Color3, alpha: number): StandardMaterial {
   const m = new StandardMaterial(name, scene);
   m.disableLighting = true;
-  m.emissiveColor = tint.clone();
+  m.emissiveColor = tint.scale(0.55);
   m.diffuseColor = Color3.Black();
   m.specularColor = Color3.Black();
   m.alpha = alpha;
@@ -92,8 +88,8 @@ function softDot(scene: Scene): DynamicTexture {
   const tex = new DynamicTexture("ainsworthFxDot", { width: size, height: size }, scene, false);
   const ctx = tex.getContext() as CanvasRenderingContext2D;
   const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  g.addColorStop(0, "rgba(255,255,255,1)");
-  g.addColorStop(0.4, "rgba(255,255,255,0.45)");
+  g.addColorStop(0, "rgba(255,255,255,0.9)");
+  g.addColorStop(0.4, "rgba(255,255,255,0.32)");
   g.addColorStop(1, "rgba(255,255,255,0)");
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, size, size);
@@ -102,7 +98,6 @@ function softDot(scene: Scene): DynamicTexture {
   return tex;
 }
 
-/** A heart path centred on (cx, cy), `r` wide-ish. */
 function heartPath(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number): void {
   ctx.beginPath();
   ctx.moveTo(cx, cy + r * 0.95);
@@ -111,79 +106,51 @@ function heartPath(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: num
   ctx.closePath();
 }
 
-/**
- * Safe Haven's ground glyph: a heart inside a shield inside a ring. White, so
- * the material tints it cyan; opacity rides the same texture.
- */
-function havenTexture(scene: Scene): DynamicTexture {
-  const size = 512;
-  const tex = new DynamicTexture("ainsworthFxHaven", { width: size, height: size }, scene, false);
-  const ctx = tex.getContext() as CanvasRenderingContext2D;
-  ctx.clearRect(0, 0, size, size);
-  const c = size / 2;
-  ctx.strokeStyle = "rgba(255,255,255,0.9)";
-  ctx.lineWidth = 6;
-  ctx.beginPath();
-  ctx.arc(c, c, size * 0.45, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.strokeStyle = "rgba(255,255,255,0.35)";
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(c, c, size * 0.4, 0, Math.PI * 2);
-  ctx.stroke();
-  // The shield.
-  const w = size * 0.26;
-  ctx.beginPath();
-  ctx.moveTo(c - w, c - w * 0.95);
-  ctx.lineTo(c + w, c - w * 0.95);
-  ctx.lineTo(c + w, c + w * 0.1);
-  ctx.quadraticCurveTo(c + w * 0.9, c + w * 0.95, c, c + w * 1.25);
-  ctx.quadraticCurveTo(c - w * 0.9, c + w * 0.95, c - w, c + w * 0.1);
-  ctx.closePath();
-  ctx.fillStyle = "rgba(255,255,255,0.12)";
-  ctx.fill();
-  ctx.lineWidth = 8;
-  ctx.strokeStyle = "rgba(255,255,255,0.95)";
-  ctx.stroke();
-  // The heart.
-  heartPath(ctx, c, c, size * 0.13);
-  ctx.fillStyle = "rgba(255,255,255,0.85)";
-  ctx.fill();
-  tex.update();
-  tex.hasAlpha = true;
-  return tex;
-}
-
-/**
- * Earned Security's heart, two layers: the heart body, and the cracks across
- * it on a second texture so they can turn gold independently.
- */
+/** Faceted rose heart and a separate white seam mask for the gold repair. */
 function heartTextures(scene: Scene): { body: DynamicTexture; cracks: DynamicTexture } {
   const size = 256;
   const c = size / 2;
   const body = new DynamicTexture("ainsworthFxHeart", { width: size, height: size }, scene, false);
   const b = body.getContext() as CanvasRenderingContext2D;
-  b.clearRect(0, 0, size, size);
   heartPath(b, c, c, size * 0.36);
-  b.fillStyle = "rgba(255,255,255,0.55)";
+  b.fillStyle = "rgba(255,255,255,0.48)";
   b.fill();
-  b.lineWidth = 8;
-  b.strokeStyle = "rgba(255,255,255,0.95)";
+  b.save();
+  heartPath(b, c, c, size * 0.36);
+  b.clip();
+  b.fillStyle = "rgba(255,255,255,0.18)";
+  b.beginPath();
+  b.moveTo(c, c);
+  b.lineTo(0, 0);
+  b.lineTo(c, 0);
+  b.closePath();
+  b.fill();
+  b.fillStyle = "rgba(255,255,255,0.12)";
+  b.beginPath();
+  b.moveTo(c, c);
+  b.lineTo(size, size * 0.2);
+  b.lineTo(size, size);
+  b.closePath();
+  b.fill();
+  b.restore();
+  heartPath(b, c, c, size * 0.36);
+  b.lineWidth = 5;
+  b.strokeStyle = "rgba(255,255,255,0.9)";
   b.stroke();
   body.update();
   body.hasAlpha = true;
 
   const cracks = new DynamicTexture("ainsworthFxCracks", { width: size, height: size }, scene, false);
   const k = cracks.getContext() as CanvasRenderingContext2D;
-  k.clearRect(0, 0, size, size);
   k.strokeStyle = "rgba(255,255,255,1)";
-  k.lineWidth = 7;
-  k.lineJoin = "round";
+  k.lineWidth = 5;
+  k.lineCap = "square";
+  k.lineJoin = "miter";
   const seams: [number, number][][] = [
-    [[0.5, 0.25], [0.44, 0.4], [0.55, 0.5], [0.46, 0.62], [0.5, 0.78]],
-    [[0.44, 0.4], [0.3, 0.44]],
-    [[0.55, 0.5], [0.7, 0.46]],
-    [[0.46, 0.62], [0.36, 0.66]],
+    [[0.5, 0.25], [0.43, 0.39], [0.55, 0.49], [0.45, 0.62], [0.5, 0.79]],
+    [[0.43, 0.39], [0.29, 0.43], [0.24, 0.52]],
+    [[0.55, 0.49], [0.7, 0.45], [0.76, 0.52]],
+    [[0.45, 0.62], [0.35, 0.68]],
   ];
   for (const seam of seams) {
     k.beginPath();
@@ -196,196 +163,237 @@ function heartTextures(scene: Scene): { body: DynamicTexture; cracks: DynamicTex
 }
 
 export function createAinsworthSkillVfx(scene: Scene, hero: TransformNode): FreudSkillVfx {
-  // ---- shared spark burst -----------------------------------------------------
-  const sparkAnchor = MeshBuilder.CreateBox("ainsworthFx_sparkAnchor", { size: 0.02 }, scene);
-  sparkAnchor.parent = hero;
-  sparkAnchor.position.y = 1.2;
-  sparkAnchor.isVisible = false;
-  const sparks = new ParticleSystem("ainsworthFx_sparks", 220, scene);
-  sparks.particleTexture = softDot(scene);
-  sparks.emitter = sparkAnchor;
-  sparks.minEmitBox = new Vector3(-0.5, -0.3, -0.5);
-  sparks.maxEmitBox = new Vector3(0.5, 0.3, 0.5);
-  sparks.blendMode = ParticleSystem.BLENDMODE_ADD;
-  sparks.minSize = 0.08;
-  sparks.maxSize = 0.26;
-  sparks.emitRate = 0;
-  sparks.direction1 = new Vector3(-0.5, 1.0, -0.5);
-  sparks.direction2 = new Vector3(0.5, 2.6, 0.5);
-  sparks.gravity = new Vector3(0, -0.4, 0);
-  sparks.start();
-  const burst = (c1: Color3, c2: Color3, n: number, y = 1.2, slow = false): void => {
-    sparkAnchor.position.y = y;
-    sparks.color1 = new Color4(c1.r, c1.g, c1.b, 0.9);
-    sparks.color2 = new Color4(c2.r, c2.g, c2.b, 0.6);
-    sparks.colorDead = new Color4(c1.r * 0.3, c1.g * 0.3, c1.b * 0.3, 0);
-    sparks.minEmitPower = slow ? 0.12 : 0.6;
-    sparks.maxEmitPower = slow ? 0.35 : 1.8;
-    sparks.minLifeTime = slow ? 1.6 : 0.5;
-    sparks.maxLifeTime = slow ? 2.6 : 1.1;
-    sparks.manualEmitCount = n;
-  };
-
-  const torus = (name: string, d: number, t: number, mat: StandardMaterial, parent: TransformNode): Mesh => {
-    const m = MeshBuilder.CreateTorus(name, { diameter: d, thickness: t, tessellation: 48 }, scene);
-    m.parent = parent;
-    m.isPickable = false;
-    m.material = mat;
-    return m;
-  };
   const root = (name: string, y = 0): TransformNode => {
     const r = new TransformNode(name, scene);
     r.parent = hero;
     r.position.y = y;
     return r;
   };
+  const tube = (name: string, path: Vector3[], radius: number, mat: StandardMaterial, parent: TransformNode): Mesh => {
+    const m = MeshBuilder.CreateTube(name, { path, radius, tessellation: 6 }, scene);
+    m.parent = parent;
+    m.material = mat;
+    m.isPickable = false;
+    return m;
+  };
+  const ribbon = (name: string, left: Vector3[], right: Vector3[], mat: StandardMaterial, parent: TransformNode): Mesh => {
+    const m = MeshBuilder.CreateRibbon(name, { pathArray: [left, right], sideOrientation: Mesh.DOUBLESIDE }, scene);
+    m.parent = parent;
+    m.material = mat;
+    m.isPickable = false;
+    return m;
+  };
+  const torus = (name: string, d: number, thickness: number, mat: StandardMaterial, parent: TransformNode): Mesh => {
+    const m = MeshBuilder.CreateTorus(name, { diameter: d, thickness, tessellation: 64 }, scene);
+    m.parent = parent;
+    m.material = mat;
+    m.isPickable = false;
+    return m;
+  };
+  /** A broad vertical arch ribbon in local XY, open at its foot. */
+  const arch = (name: string, radius: number, width: number, start: number, end: number, mat: StandardMaterial, parent: TransformNode): Mesh => {
+    const inner: Vector3[] = [];
+    const outer: Vector3[] = [];
+    for (let i = 0; i <= 28; i++) {
+      const a = start + (end - start) * (i / 28);
+      inner.push(new Vector3(Math.cos(a) * (radius - width / 2), Math.sin(a) * (radius - width / 2), 0));
+      outer.push(new Vector3(Math.cos(a) * (radius + width / 2), Math.sin(a) * (radius + width / 2), 0));
+    }
+    return ribbon(name, inner, outer, mat, parent);
+  };
+  const groundArc = (name: string, radius: number, width: number, start: number, end: number, mat: StandardMaterial, parent: TransformNode): Mesh => {
+    const inner: Vector3[] = [];
+    const outer: Vector3[] = [];
+    for (let i = 0; i <= 24; i++) {
+      const a = start + (end - start) * (i / 24);
+      inner.push(new Vector3(Math.cos(a) * (radius - width / 2), 0, Math.sin(a) * (radius - width / 2)));
+      outer.push(new Vector3(Math.cos(a) * (radius + width / 2), 0, Math.sin(a) * (radius + width / 2)));
+    }
+    return ribbon(name, inner, outer, mat, parent);
+  };
 
-  // ---- 1 Secure: the embrace and the release ----------------------------------
+  const sparkAnchor = MeshBuilder.CreateBox("ainsworthFx_sparkAnchor", { size: 0.02 }, scene);
+  sparkAnchor.parent = hero;
+  sparkAnchor.position.y = 1.2;
+  sparkAnchor.isVisible = false;
+  const sparks = new ParticleSystem("ainsworthFx_sparks", 200, scene);
+  sparks.particleTexture = softDot(scene);
+  sparks.emitter = sparkAnchor;
+  sparks.minEmitBox = new Vector3(-0.4, -0.2, -0.4);
+  sparks.maxEmitBox = new Vector3(0.4, 0.2, 0.4);
+  sparks.blendMode = ParticleSystem.BLENDMODE_ADD;
+  sparks.minSize = 0.04;
+  sparks.maxSize = 0.16;
+  sparks.minLifeTime = 0.45;
+  sparks.maxLifeTime = 1.0;
+  sparks.emitRate = 0;
+  sparks.direction1 = new Vector3(-0.4, 0.8, -0.4);
+  sparks.direction2 = new Vector3(0.4, 2.0, 0.4);
+  sparks.gravity = new Vector3(0, -0.3, 0);
+  sparks.start();
+  const burst = (c1: Color3, c2: Color3, n: number, y = 1.2, slow = false): void => {
+    sparkAnchor.position.y = y;
+    sparks.color1 = new Color4(c1.r, c1.g, c1.b, 0.72);
+    sparks.color2 = new Color4(c2.r, c2.g, c2.b, 0.45);
+    sparks.colorDead = new Color4(c1.r * 0.25, c1.g * 0.25, c1.b * 0.25, 0);
+    sparks.minEmitPower = slow ? 0.12 : 0.5;
+    sparks.maxEmitPower = slow ? 0.35 : 1.5;
+    sparks.minLifeTime = slow ? 1.6 : 0.45;
+    sparks.maxLifeTime = slow ? 2.6 : 1.0;
+    sparks.manualEmitCount = n;
+  };
+
+  // ---- 1 Secure: two distinct ribbons close, then willingly release --------
   const secureRoot = root("ainsworthFx_secureRoot", 1.15);
   const secureMat = fxMat(scene, "ainsworthFx_secureMat", ROSE, 0);
-  // Two half-arcs: a full torus clipped visually by scaling one axis would not
-  // read; two tori squashed into C-shapes from either side do.
-  const arcs = [-1, 1].map((side) => {
-    const a = torus(`ainsworthFx_secureArc_${side}`, 1.6, 0.06, secureMat, secureRoot);
-    a.rotation.y = Math.PI / 2;
-    a.scaling.set(1, 1, 0.45);
-    a.position.x = side * 0.9;
+  const secureAccentMat = fxMat(scene, "ainsworthFx_secureAccentMat", new Color3(1, 0.68, 0.74), 0);
+  const secureArcs = [-1, 1].map((side, i) => {
+    const a = arch(`ainsworthFx_secureArc_${side}`, 1.0, 0.16, -Math.PI * 0.42, Math.PI * 0.42, i ? secureAccentMat : secureMat, secureRoot);
+    a.rotation.z = side * Math.PI / 2;
+    a.position.x = side * 1.0;
     return a;
   });
+  const releaseRoot = root("ainsworthFx_releaseRoot", 0.09);
   const releaseMat = fxMat(scene, "ainsworthFx_releaseMat", ROSE, 0);
-  const release = torus("ainsworthFx_release", 1, 0.05, releaseMat, root("ainsworthFx_releaseRoot", 0.08));
+  const release = [
+    groundArc("ainsworthFx_releaseA", 1, 0.075, -Math.PI * 0.45, Math.PI * 0.45, releaseMat, releaseRoot),
+    groundArc("ainsworthFx_releaseB", 1, 0.075, Math.PI * 0.55, Math.PI * 1.45, releaseMat, releaseRoot),
+  ];
 
-  // ---- 2 Avoidant: the shell and the hidden heartbeat ---------------------------
-  const avoidRoot = root("ainsworthFx_avoidRoot", 0);
-  const shellMat = fxMat(scene, "ainsworthFx_shellMat", STEEL, 0);
-  const shell = MeshBuilder.CreateSphere("ainsworthFx_shell", { diameter: 2.4, segments: 20, slice: 0.55 }, scene);
-  shell.parent = avoidRoot;
-  shell.isPickable = false;
-  shell.material = shellMat;
-  const beatMat = fxMat(scene, "ainsworthFx_beatMat", STEEL, 0);
-  const beat = torus("ainsworthFx_beat", 0.7, 0.04, beatMat, avoidRoot);
-  beat.position.y = 1.3;
+  // ---- 2 Avoidant: separated arcs and a restrained, private heartbeat ------
+  const avoidRoot = root("ainsworthFx_avoidRoot", 1.25);
+  const avoidMat = fxMat(scene, "ainsworthFx_avoidMat", STEEL, 0);
+  const avoidArcs = [-1, 1].map((side) => {
+    const a = arch(`ainsworthFx_avoidArc_${side}`, 1.05, 0.1, -Math.PI * 0.38, Math.PI * 0.38, avoidMat, avoidRoot);
+    a.rotation.z = side * Math.PI / 2;
+    a.position.x = side * 0.85;
+    return a;
+  });
+  const beatMat = fxMat(scene, "ainsworthFx_beatMat", new Color3(0.72, 0.82, 0.9), 0);
+  const beat = tube("ainsworthFx_beat", [
+    new Vector3(-0.45, 0, 0), new Vector3(-0.18, 0, 0), new Vector3(-0.08, 0.12, 0),
+    new Vector3(0.02, -0.16, 0), new Vector3(0.12, 0.08, 0), new Vector3(0.2, 0, 0), new Vector3(0.45, 0, 0),
+  ], 0.018, beatMat, avoidRoot);
+  beat.position.z = 0.08;
 
-  // ---- 3 Ambivalent: pull in, push out ----------------------------------------
-  const ambRoot = root("ainsworthFx_ambRoot", 0.1);
+  // ---- 3 Ambivalent: asymmetric attachment ribbons pull then push ----------
+  const ambRoot = root("ainsworthFx_ambRoot", 1.1);
   const pullMat = fxMat(scene, "ainsworthFx_pullMat", CORAL, 0);
-  const pull = torus("ainsworthFx_pull", 1, 0.07, pullMat, ambRoot);
-  const pushMat = fxMat(scene, "ainsworthFx_pushMat", CORAL, 0);
-  const push = torus("ainsworthFx_push", 1, 0.09, pushMat, ambRoot);
+  const pushMat = fxMat(scene, "ainsworthFx_pushMat", ROSE, 0);
+  const pull = arch("ainsworthFx_pull", 1.35, 0.19, -Math.PI * 0.6, Math.PI * 0.42, pullMat, ambRoot);
+  pull.rotation.z = Math.PI * 0.8;
+  const push = arch("ainsworthFx_push", 0.9, 0.1, -Math.PI * 0.35, Math.PI * 0.55, pushMat, ambRoot);
+  push.rotation.z = -Math.PI * 0.65;
 
-  // ---- 4 Disorganized: glitch panes, then the shelter dome ----------------------
-  const disRoot = root("ainsworthFx_disRoot", 0);
+  // ---- 4 Disorganized: fragments rewoven into a violet/cyan shelter --------
+  const disRoot = root("ainsworthFx_disRoot");
   const glitchMat = fxMat(scene, "ainsworthFx_glitchMat", VIOLET, 0);
-  const panes = [0, 1, 2, 3, 4, 5].map((k) => {
-    const m = MeshBuilder.CreatePlane(`ainsworthFx_pane_${k}`, { width: 0.5, height: 0.12 }, scene);
+  const fragments = Array.from({ length: 10 }, (_, i) => {
+    const m = MeshBuilder.CreatePlane(`ainsworthFx_fragment_${i}`, { width: 0.55, height: 0.12 }, scene);
     m.parent = disRoot;
-    m.isPickable = false;
     m.material = glitchMat;
+    m.isPickable = false;
     return m;
   });
-  const shelterMat = fxMat(scene, "ainsworthFx_shelterMat", VIOLET, 0);
-  const shelter = MeshBuilder.CreateSphere("ainsworthFx_shelter", { diameter: 2, segments: 24, slice: 0.5 }, scene);
-  shelter.parent = disRoot;
-  shelter.isPickable = false;
-  shelter.material = shelterMat;
-  const shelterRimMat = fxMat(scene, "ainsworthFx_shelterRimMat", CYAN, 0);
-  const shelterRim = torus("ainsworthFx_shelterRim", 2, 0.03, shelterRimMat, disRoot);
-  shelterRim.position.y = 0.05;
+  const shelterVioletMat = fxMat(scene, "ainsworthFx_shelterVioletMat", VIOLET, 0);
+  const shelterCyanMat = fxMat(scene, "ainsworthFx_shelterCyanMat", CYAN, 0);
+  const shelterRibs = Array.from({ length: 8 }, (_, i) => {
+    const rib = arch(`ainsworthFx_shelterRib_${i}`, 1, 0.055, 0, Math.PI, i % 2 ? shelterCyanMat : shelterVioletMat, disRoot);
+    rib.rotation.y = (i / 8) * Math.PI;
+    return rib;
+  });
+  const shelterBondMat = fxMat(scene, "ainsworthFx_shelterBondMat", CYAN, 0);
+  const shelterBonds = [0, 1, 2].map((i) => {
+    const bond = torus(`ainsworthFx_shelterBond_${i}`, 2, 0.018, shelterBondMat, disRoot);
+    bond.position.y = 0.18 + i * 0.34;
+    return bond;
+  });
 
-  // ---- E Safe Haven: glyph and dome --------------------------------------------
-  const havenRoot = root("ainsworthFx_havenRoot", 0.06);
-  const glyphMat = fxMat(scene, "ainsworthFx_glyphMat", CYAN, 0);
-  const glyphTex = havenTexture(scene);
-  glyphMat.emissiveTexture = glyphTex;
-  glyphMat.opacityTexture = glyphTex;
-  const glyph = MeshBuilder.CreateDisc("ainsworthFx_glyph", { radius: 2.2, tessellation: 64 }, scene);
-  glyph.parent = havenRoot;
-  glyph.rotation.x = Math.PI / 2;
-  glyph.isPickable = false;
-  glyph.material = glyphMat;
-  const domeMat = fxMat(scene, "ainsworthFx_domeMat", CYAN, 0);
-  const dome = MeshBuilder.CreateSphere("ainsworthFx_dome", { diameter: 4.4, segments: 28, slice: 0.5 }, scene);
-  dome.parent = havenRoot;
-  dome.isPickable = false;
-  dome.material = domeMat;
-  const domeBandMat = fxMat(scene, "ainsworthFx_domeBandMat", TEAL, 0);
-  const domeBand = torus("ainsworthFx_domeBand", 4.4, 0.03, domeBandMat, havenRoot);
+  // ---- E Safe Haven: a structured cyan canopy, never a translucent dome ----
+  const havenRoot = root("ainsworthFx_havenRoot");
+  const havenMat = fxMat(scene, "ainsworthFx_havenMat", CYAN, 0);
+  const havenRibs = Array.from({ length: 6 }, (_, i) => {
+    const rib = arch(`ainsworthFx_havenRib_${i}`, 2.15, 0.065, 0, Math.PI, havenMat, havenRoot);
+    rib.rotation.y = (i / 6) * Math.PI;
+    return rib;
+  });
+  const havenAccentMat = fxMat(scene, "ainsworthFx_havenAccentMat", TEAL, 0);
+  const havenBond = torus("ainsworthFx_havenBond", 4.3, 0.025, havenAccentMat, havenRoot);
+  havenBond.position.y = 0.06;
+  const havenThreads = Array.from({ length: 4 }, (_, i) => {
+    const a = (i / 4) * TAU + Math.PI / 4;
+    return tube(`ainsworthFx_havenThread_${i}`, [new Vector3(Math.cos(a) * 2.12, 0.06, Math.sin(a) * 2.12), new Vector3(0, 2.15, 0)], 0.012, havenAccentMat, havenRoot);
+  });
 
-  // ---- R Strange Situation: the doorway ---------------------------------------
-  const doorRoot = root("ainsworthFx_doorRoot", 0);
+  // ---- R Strange Situation: threshold, separation, reunion -----------------
+  const doorRoot = root("ainsworthFx_doorRoot");
   const doorMat = fxMat(scene, "ainsworthFx_doorMat", GOLD, 0);
   const jambs = [-1, 1].map((side) => {
-    const m = MeshBuilder.CreateBox(`ainsworthFx_jamb_${side}`, { width: 0.1, height: 2.3, depth: 0.1 }, scene);
+    const m = MeshBuilder.CreateBox(`ainsworthFx_jamb_${side}`, { width: 0.055, height: 2.45, depth: 0.055 }, scene);
     m.parent = doorRoot;
-    m.position.set(side * 0.62, 1.15, 0);
-    m.isPickable = false;
+    m.position.set(side * 0.66, 1.225, 0);
     m.material = doorMat;
+    m.isPickable = false;
     return m;
   });
-  const lintel = MeshBuilder.CreateBox("ainsworthFx_lintel", { width: 1.34, height: 0.1, depth: 0.1 }, scene);
+  const lintel = MeshBuilder.CreateBox("ainsworthFx_lintel", { width: 1.375, height: 0.055, depth: 0.055 }, scene);
   lintel.parent = doorRoot;
-  lintel.position.y = 2.3;
-  lintel.isPickable = false;
+  lintel.position.y = 2.45;
   lintel.material = doorMat;
-  const leafHinge = new TransformNode("ainsworthFx_leafHinge", scene);
-  leafHinge.parent = doorRoot;
-  leafHinge.position.set(-0.58, 1.12, 0);
-  const leafMat = fxMat(scene, "ainsworthFx_leafMat", GOLD, 0);
-  const leaf = MeshBuilder.CreatePlane("ainsworthFx_leaf", { width: 1.12, height: 2.2 }, scene);
-  leaf.parent = leafHinge;
-  leaf.position.x = 0.56;
-  leaf.isPickable = false;
-  leaf.material = leafMat;
-  const revealMat = fxMat(scene, "ainsworthFx_revealMat", GOLD, 0);
-  const reveal = torus("ainsworthFx_reveal", 1, 0.06, revealMat, root("ainsworthFx_revealRoot", 0.08));
+  lintel.isPickable = false;
+  const threshold = tube("ainsworthFx_threshold", [new Vector3(-1.05, 0.06, 0), new Vector3(1.05, 0.06, 0)], 0.025, doorMat, doorRoot);
+  const separationMat = fxMat(scene, "ainsworthFx_separationMat", STEEL, 0);
+  const separation = ribbon("ainsworthFx_separation", [new Vector3(0, 0.25, 0), new Vector3(0, 0.5, 1), new Vector3(0, 0.2, 2)], [new Vector3(0.1, 0.25, 0), new Vector3(0.1, 0.5, 1), new Vector3(0.1, 0.2, 2)], separationMat, doorRoot);
+  const reunionRoot = root("ainsworthFx_reunionRoot", 1.0);
+  const reunionMat = fxMat(scene, "ainsworthFx_reunionMat", ROSE, 0);
+  const reunion = arch("ainsworthFx_reunion", 1.2, 0.12, 0, Math.PI, reunionMat, reunionRoot);
 
-  // ---- F Earned Security: the mended heart and the wave ---------------------------
+  // ---- F Earned Security: kintsugi repair and paired gold bond wave --------
   const earnRoot = root("ainsworthFx_earnRoot", 2.7);
   const { body: heartTex, cracks: crackTex } = heartTextures(scene);
   const heartMat = fxMat(scene, "ainsworthFx_heartMat", ROSE, 0);
   heartMat.emissiveTexture = heartTex;
   heartMat.opacityTexture = heartTex;
-  const heart = MeshBuilder.CreatePlane("ainsworthFx_heart", { size: 1.3 }, scene);
+  const heart = MeshBuilder.CreatePlane("ainsworthFx_heart", { size: 1.45 }, scene);
   heart.parent = earnRoot;
   heart.billboardMode = Mesh.BILLBOARDMODE_ALL;
-  heart.isPickable = false;
   heart.material = heartMat;
+  heart.isPickable = false;
   const crackMat = fxMat(scene, "ainsworthFx_crackMat", GOLD, 0);
   crackMat.emissiveTexture = crackTex;
   crackMat.opacityTexture = crackTex;
-  const crack = MeshBuilder.CreatePlane("ainsworthFx_crack", { size: 1.3 }, scene);
+  const crack = MeshBuilder.CreatePlane("ainsworthFx_crack", { size: 1.45 }, scene);
   crack.parent = earnRoot;
   crack.billboardMode = Mesh.BILLBOARDMODE_ALL;
-  crack.isPickable = false;
   crack.material = crackMat;
+  crack.isPickable = false;
+  const waveRoot = root("ainsworthFx_waveRoot", 0.1);
   const waveMat = fxMat(scene, "ainsworthFx_waveMat", GOLD, 0);
-  const wave = torus("ainsworthFx_wave", 1, 0.08, waveMat, root("ainsworthFx_waveRoot", 0.1));
+  const waves = [
+    groundArc("ainsworthFx_waveA", 1, 0.09, -Math.PI * 0.43, Math.PI * 0.43, waveMat, waveRoot),
+    groundArc("ainsworthFx_waveB", 1, 0.09, Math.PI * 0.57, Math.PI * 1.43, waveMat, waveRoot),
+  ];
 
-  // ---- glow (tier-gated) ----------------------------------------------------------
   const glowOptions = vfxGlowOptions();
   const glow = glowOptions ? new GlowLayer("ainsworthFx_glow", scene, glowOptions) : null;
   if (glow) {
-    glow.intensity = 1.0;
-    for (const m of [...arcs, release, beat, pull, push, shelterRim, domeBand, ...jambs, lintel, reveal, crack, wave]) {
-      glow.addIncludedOnlyMesh(m);
-    }
+    glow.intensity = 0.7;
+    for (const m of [...secureArcs, beat, ...shelterRibs, ...havenRibs, ...havenThreads, lintel, threshold, reunion, crack, ...waves]) glow.addIncludedOnlyMesh(m);
     scene.onDisposeObservable.add(() => glow.dispose());
   }
 
-  const roots = [secureRoot, release.parent, avoidRoot, ambRoot, disRoot, havenRoot, doorRoot, reveal.parent, earnRoot, wave.parent] as TransformNode[];
+  const roots = [secureRoot, releaseRoot, avoidRoot, ambRoot, disRoot, havenRoot, doorRoot, reunionRoot, earnRoot, waveRoot];
   for (const r of roots) r.setEnabled(false);
 
-  // Compile every shader now — a still-compiling material renders as nothing.
   const warm: [Mesh, StandardMaterial][] = [
-    [arcs[0]!, secureMat], [release, releaseMat], [shell, shellMat], [beat, beatMat], [pull, pullMat],
-    [push, pushMat], [panes[0]!, glitchMat], [shelter, shelterMat], [shelterRim, shelterRimMat],
-    [glyph, glyphMat], [dome, domeMat], [domeBand, domeBandMat], [jambs[0]!, doorMat], [leaf, leafMat],
-    [reveal, revealMat], [heart, heartMat], [crack, crackMat], [wave, waveMat],
+    [secureArcs[0]!, secureMat], [secureArcs[1]!, secureAccentMat], [release[0]!, releaseMat], [avoidArcs[0]!, avoidMat],
+    [beat, beatMat], [pull, pullMat], [push, pushMat], [fragments[0]!, glitchMat], [shelterRibs[0]!, shelterVioletMat],
+    [shelterRibs[1]!, shelterCyanMat], [shelterBonds[0]!, shelterBondMat], [havenRibs[0]!, havenMat], [havenBond, havenAccentMat],
+    [jambs[0]!, doorMat], [separation, separationMat], [reunion, reunionMat], [heart, heartMat], [crack, crackMat], [waves[0]!, waveMat],
   ];
   for (const [mesh, mat] of warm) mat.forceCompilation(mesh);
   for (const m of scene.meshes) if (m.name.startsWith("ainsworthFx_")) m.applyFog = false;
 
-  // ---- per-frame driver -----------------------------------------------------------
   const secs = (ms: number | undefined, fallback: number): number => (ms ?? fallback) / 1000;
   const SECURE_SECS = 1.3;
   const AVOID_SECS = secs(AINSWORTH.palette.find((p) => p.id === "ainsworth.avoidant")?.effects.find((e) => e.kind === "self.stagger")?.durationMs, 4_000);
@@ -395,9 +403,7 @@ export function createAinsworthSkillVfx(scene: Scene, hero: TransformNode): Freu
   const HAVEN_SECS = secs(AINSWORTH.defense.mitigation?.durationMs, 6_000);
   const DOOR_SECS = 1.7;
   const EARN_SECS = 2.6;
-  /** Reach of the team-wide effects, metres: about where a party stands. */
   const TEAM_R = 6;
-
   let secureT = -1;
   let avoidT = -1;
   let ambT = -1;
@@ -409,149 +415,170 @@ export function createAinsworthSkillVfx(scene: Scene, hero: TransformNode): Freu
   scene.onBeforeRenderObservable.add(() => {
     const dt = scene.getEngine().getDeltaTime() / 1000;
 
-    // 1 — the arcs close round her, hold a beat, then the release ring runs out.
     if (secureT >= 0) {
       secureT += dt;
       const u = clamp01(secureT / SECURE_SECS);
-      const close = sstep(0, 0.35, u);
-      const open = sstep(0.5, 0.75, u);
-      for (const [k, a] of arcs.entries()) a.position.x = (k ? 1 : -1) * (0.9 - 0.45 * close + 0.9 * open);
-      secureMat.alpha = 0.9 * pulse(u, 0, 0.8, 0.15);
-      const r = sstep(0.5, 1, u);
-      release.scaling.set(0.6 + r * TEAM_R * 1.6, 1, 0.6 + r * TEAM_R * 1.6);
-      releaseMat.alpha = 0.8 * pulse(u, 0.5, 1, 0.12);
+      const close = sstep(0, 0.32, u);
+      const open = sstep(0.52, 0.82, u);
+      for (let i = 0; i < secureArcs.length; i++) {
+        const side = i ? 1 : -1;
+        const a = secureArcs[i]!;
+        a.position.x = side * (1.0 - close * 0.72 + open * 1.2);
+        a.rotation.y = side * (0.4 * (1 - close) + open * 0.6);
+        a.scaling.y = 0.85 + close * 0.15;
+      }
+      secureMat.alpha = 0.78 * pulse(u, 0, 0.88, 0.14);
+      secureAccentMat.alpha = secureMat.alpha;
+      const r = sstep(0.52, 1, u);
+      releaseRoot.scaling.set(0.7 + r * TEAM_R * 1.45, 1, 0.7 + r * TEAM_R * 1.45);
+      releaseMat.alpha = 0.58 * pulse(u, 0.52, 1, 0.1);
       if (secureT >= SECURE_SECS) {
         secureT = -1;
         secureRoot.setEnabled(false);
-        release.parent!.setEnabled(false);
+        releaseRoot.setEnabled(false);
       }
     }
 
-    // 2 — the shell closes, turned away, and the heartbeat races inside it.
     if (avoidT >= 0) {
       avoidT += dt;
       const u = clamp01(avoidT / AVOID_SECS);
-      const fade = sstep(0, 0.06, u) * (1 - sstep(0.85, 1, u));
-      shell.scaling.setAll(Math.max(0.01, outBack(clamp01(avoidT / 0.35))));
-      shellMat.alpha = 0.22 * fade;
-      // A fast double beat (lub-dub) — racing, under the calm surface.
-      const ph = (avoidT * 2.2) % 1;
-      const lub = Math.exp(-((ph - 0.08) ** 2) / 0.002) + 0.7 * Math.exp(-((ph - 0.26) ** 2) / 0.002);
-      beat.scaling.setAll(1 + lub * 0.5);
-      beatMat.alpha = (0.25 + 0.75 * lub) * fade;
+      const fade = sstep(0, 0.045, u) * (1 - sstep(0.88, 1, u));
+      const arrive = outBack(clamp01(avoidT / 0.35));
+      avoidRoot.scaling.setAll(Math.max(0.01, arrive));
+      avoidMat.alpha = 0.48 * fade;
+      for (let i = 0; i < avoidArcs.length; i++) {
+        const side = i ? 1 : -1;
+        avoidArcs[i]!.position.x = side * (0.82 + 0.12 * Math.sin(Math.min(avoidT, 1) * Math.PI));
+      }
+      // A quiet lub-dub once per second, not a racing alarm.
+      const ph = avoidT % 1;
+      const lub = Math.exp(-((ph - 0.12) ** 2) / 0.004) + 0.55 * Math.exp(-((ph - 0.29) ** 2) / 0.005);
+      beat.scaling.setAll(0.9 + lub * 0.12);
+      beatMat.alpha = (0.2 + lub * 0.5) * fade;
       if (avoidT >= AVOID_SECS) {
         avoidT = -1;
         avoidRoot.setEnabled(false);
       }
     }
 
-    // 3 — pull in, push out, twice.
     if (ambT >= 0) {
       ambT += dt;
       const u = clamp01(ambT / AMB_SECS);
       const half = u < 0.5 ? u * 2 : (u - 0.5) * 2;
-      const pullS = 3.2 - 2.8 * sstep(0, 0.45, half);
-      pull.scaling.set(pullS, 1, pullS);
-      pullMat.alpha = 0.85 * pulse(half, 0, 0.5, 0.15);
-      const pushS = 0.4 + 4.2 * sstep(0.45, 1, half);
-      push.scaling.set(pushS, 1, pushS);
-      pushMat.alpha = 0.9 * pulse(half, 0.45, 1, 0.12);
+      const inward = sstep(0, 0.46, half);
+      const outward = sstep(0.46, 1, half);
+      pull.scaling.setAll(1.55 - inward * 0.75 + outward * 0.25);
+      pull.rotation.y = -0.45 + inward * 0.7;
+      pullMat.alpha = 0.78 * pulse(half, 0, 0.56, 0.14);
+      push.scaling.setAll(0.65 + outward * 1.8);
+      push.rotation.y = 0.55 - outward * 0.85;
+      pushMat.alpha = 0.7 * pulse(half, 0.44, 1, 0.12);
       if (ambT >= AMB_SECS) {
         ambT = -1;
         ambRoot.setEnabled(false);
       }
     }
 
-    // 4 — glitch panes stutter round her (the freeze), then the dome.
     if (disT >= 0) {
       disT += dt;
-      const glitchOn = disT < GLITCH_SECS;
-      for (const p of panes) {
-        p.setEnabled(glitchOn && Math.random() < 0.7);
-        if (p.isEnabled()) {
-          p.position.set((Math.random() - 0.5) * 1.4, 0.4 + Math.random() * 1.8, (Math.random() - 0.5) * 1.4);
-          p.rotation.y = Math.random() * Math.PI;
+      const broken = disT < GLITCH_SECS;
+      glitchMat.alpha = broken ? 0.7 : 0;
+      for (let i = 0; i < fragments.length; i++) {
+        const f = fragments[i]!;
+        f.setEnabled(broken);
+        if (broken) {
+          const snap = Math.floor(disT * 18);
+          const a = (i / fragments.length) * TAU + snap * 0.12;
+          f.position.set(Math.cos(a) * (0.8 + (i % 3) * 0.22), 0.35 + (i % 5) * 0.38, Math.sin(a) * (0.8 + (i % 3) * 0.22));
+          f.rotation.set(0, -a + Math.PI / 2, (i % 2 ? 1 : -1) * (0.3 + (snap % 3) * 0.22));
         }
       }
-      glitchMat.alpha = glitchOn ? 0.85 : 0;
       const d = disT - GLITCH_SECS;
       if (d >= 0) {
         const u = clamp01(d / IMMUNE_SECS);
-        const grow = outBack(clamp01(d / 0.3));
-        const fade = 1 - sstep(0.85, 1, u);
-        shelter.scaling.setAll(Math.max(0.01, grow * TEAM_R));
-        shelterMat.alpha = 0.14 * fade;
-        shelterRim.scaling.set(grow * TEAM_R, 1, grow * TEAM_R);
-        shelterRimMat.alpha = 0.8 * fade * (0.75 + 0.25 * Math.sin(d * 9));
+        const fade = 1 - sstep(0.88, 1, u);
+        const grow = outBack(clamp01(d / 0.4));
+        disRoot.scaling.setAll(Math.max(0.01, grow * TEAM_R));
+        for (let i = 0; i < shelterRibs.length; i++) {
+          const weave = sstep(i * 0.018, 0.12 + i * 0.018, d);
+          shelterRibs[i]!.scaling.set(1, Math.max(0.01, weave), 1);
+          shelterRibs[i]!.rotation.z = (1 - weave) * (i % 2 ? 0.5 : -0.5);
+        }
+        shelterVioletMat.alpha = 0.58 * fade;
+        shelterCyanMat.alpha = 0.62 * fade;
+        for (let i = 0; i < shelterBonds.length; i++) {
+          const y = 0.18 + i * 0.34;
+          const r = Math.sqrt(Math.max(0.05, 1 - y * y));
+          shelterBonds[i]!.scaling.set(r, 1, r);
+          shelterBonds[i]!.rotation.y = d * (i % 2 ? -0.35 : 0.35);
+        }
+        shelterBondMat.alpha = 0.38 * fade;
         if (d >= IMMUNE_SECS) {
           disT = -1;
           disRoot.setEnabled(false);
+          disRoot.scaling.setAll(1);
         }
-      } else {
-        shelterMat.alpha = 0;
-        shelterRimMat.alpha = 0;
       }
     }
 
-    // E — the glyph and the dome, for the whole mitigation window.
     if (havenT >= 0) {
       havenT += dt;
       const u = clamp01(havenT / HAVEN_SECS);
-      const fade = sstep(0, 0.05, u) * (1 - sstep(0.88, 1, u));
-      const grow = outBack(clamp01(havenT / 0.4));
-      glyph.scaling.setAll(Math.max(0.01, grow));
-      glyph.rotation.z += dt * 0.25;
-      glyphMat.alpha = 0.85 * fade;
-      dome.scaling.setAll(Math.max(0.01, grow) * (1 + Math.sin(havenT * 2) * 0.015));
-      domeMat.alpha = 0.12 * fade;
-      domeBandMat.alpha = 0.6 * fade;
-      domeBand.position.y = 0.1 + ((havenT * 0.6) % 1) * 2.0;
-      const bandR = Math.sqrt(Math.max(0, 1 - (domeBand.position.y / 2.2) ** 2));
-      domeBand.scaling.set(bandR, 1, bandR);
+      const fade = sstep(0, 0.04, u) * (1 - sstep(0.9, 1, u));
+      const grow = outBack(clamp01(havenT / 0.42));
+      havenRoot.scaling.setAll(Math.max(0.01, grow));
+      havenMat.alpha = (0.42 + Math.sin(havenT * 1.3) * 0.035) * fade;
+      havenAccentMat.alpha = 0.48 * fade;
+      for (let i = 0; i < havenRibs.length; i++) {
+        const draw = sstep(i * 0.035, 0.22 + i * 0.035, havenT);
+        havenRibs[i]!.scaling.y = Math.max(0.01, draw);
+      }
+      havenBond.rotation.y += dt * 0.12;
       if (havenT >= HAVEN_SECS) {
         havenT = -1;
         havenRoot.setEnabled(false);
       }
     }
 
-    // R — the doorway rises, the door swings out and back, the reveal runs.
     if (doorT >= 0) {
       doorT += dt;
       const u = clamp01(doorT / DOOR_SECS);
-      doorRoot.scaling.y = Math.max(0.01, outBack(clamp01(u / 0.25)));
-      doorMat.alpha = 0.9 * pulse(u, 0, 1, 0.15);
-      // Separation: the door opens (she leaves); reunion: it swings back.
-      leafHinge.rotation.y = -1.6 * sstep(0.15, 0.4, u) * (1 - sstep(0.55, 0.75, u));
-      leafMat.alpha = 0.35 * pulse(u, 0.05, 0.95, 0.15);
-      const r = sstep(0.7, 1, u);
-      reveal.scaling.set(0.5 + r * TEAM_R * 1.7, 1, 0.5 + r * TEAM_R * 1.7);
-      revealMat.alpha = 0.85 * pulse(u, 0.7, 1, 0.08);
+      doorRoot.scaling.y = Math.max(0.01, outBack(clamp01(u / 0.22)));
+      doorMat.alpha = 0.72 * pulse(u, 0, 0.92, 0.14);
+      const leave = sstep(0.12, 0.42, u) * (1 - sstep(0.48, 0.7, u));
+      separation.scaling.z = Math.max(0.01, leave);
+      separationMat.alpha = 0.42 * pulse(u, 0.12, 0.68, 0.12);
+      const back = sstep(0.5, 0.82, u);
+      reunionRoot.position.z = -1.1 + back * 1.1;
+      reunionRoot.position.y = 0.3 + Math.sin(back * Math.PI) * 0.6;
+      reunionRoot.scaling.setAll(0.5 + back * 0.7);
+      reunionMat.alpha = 0.72 * pulse(u, 0.48, 1, 0.12);
       if (doorT >= DOOR_SECS) {
         doorT = -1;
         doorRoot.setEnabled(false);
-        reveal.parent!.setEnabled(false);
+        reunionRoot.setEnabled(false);
       }
     }
 
-    // F — the cracked heart rises, the seams fill gold, it shines, the wave.
     if (earnT >= 0) {
       earnT += dt;
       const u = clamp01(earnT / EARN_SECS);
-      earnRoot.position.y = 1.6 + 1.1 * sstep(0, 0.3, u);
-      const mend = sstep(0.3, 0.65, u);
-      heartMat.emissiveColor.copyFrom(Color3.Lerp(ROSE, GOLD, mend));
-      heartMat.alpha = 0.95 * pulse(u, 0, 0.92, 0.1);
-      crackMat.alpha = (0.35 + 0.65 * mend) * pulse(u, 0, 0.92, 0.1);
-      const shine = pulse(u, 0.62, 0.85, 0.08);
-      heart.scaling.setAll(1 + shine * 0.35);
-      crack.scaling.setAll(1 + shine * 0.35);
-      const w = sstep(0.7, 1, u);
-      wave.scaling.set(0.6 + w * TEAM_R * 1.8, 1, 0.6 + w * TEAM_R * 1.8);
-      waveMat.alpha = 0.9 * pulse(u, 0.7, 1, 0.06);
+      earnRoot.position.y = 1.55 + 1.1 * sstep(0, 0.28, u);
+      const mend = sstep(0.26, 0.66, u);
+      heartMat.emissiveColor.copyFrom(Color3.Lerp(ROSE.scale(0.78), GOLD.scale(0.78), mend * 0.55));
+      heartMat.alpha = 0.84 * pulse(u, 0, 0.9, 0.1);
+      crackMat.alpha = (0.25 + mend * 0.65) * pulse(u, 0.22, 0.93, 0.1);
+      const settle = 1 + Math.sin(mend * Math.PI) * 0.1;
+      heart.scaling.setAll(settle);
+      crack.scaling.setAll(settle);
+      const w = sstep(0.68, 1, u);
+      waveRoot.scaling.set(0.65 + w * TEAM_R * 1.65, 1, 0.65 + w * TEAM_R * 1.65);
+      waveRoot.rotation.y = w * 0.3;
+      waveMat.alpha = 0.64 * pulse(u, 0.68, 1, 0.07);
       if (earnT >= EARN_SECS) {
         earnT = -1;
         earnRoot.setEnabled(false);
-        wave.parent!.setEnabled(false);
+        waveRoot.setEnabled(false);
       }
     }
   });
@@ -563,40 +590,41 @@ export function createAinsworthSkillVfx(scene: Scene, hero: TransformNode): Freu
           if (id === "ainsworth.secure") {
             secureT = 0;
             secureRoot.setEnabled(true);
-            release.parent!.setEnabled(true);
-            burst(ROSE, new Color3(1, 0.85, 0.9), 34, 1.2);
+            releaseRoot.setEnabled(true);
+            burst(ROSE, new Color3(1, 0.82, 0.88), 26, 1.2);
           } else if (id === "ainsworth.avoidant") {
             avoidT = 0;
-            avoidRoot.rotation.y = Math.PI; // the shell's open side turned away
             avoidRoot.setEnabled(true);
-            burst(STEEL, new Color3(0.85, 0.92, 1), 18, 1.3, true);
+            burst(STEEL, new Color3(0.82, 0.9, 1), 14, 1.3, true);
           } else if (id === "ainsworth.ambivalent") {
             ambT = 0;
             ambRoot.setEnabled(true);
-            burst(CORAL, new Color3(1, 0.75, 0.55), 40, 1.0);
+            burst(CORAL, ROSE, 28, 1.0);
           } else if (id === "ainsworth.disorganized") {
             disT = 0;
+            disRoot.scaling.setAll(1);
             disRoot.setEnabled(true);
-            burst(VIOLET, CYAN, 50, 1.1);
+            burst(VIOLET, CYAN, 36, 1.1);
           }
           break;
         case "defense":
           havenT = 0;
           havenRoot.setEnabled(true);
-          burst(CYAN, TEAL, 30, 0.6, true);
+          burst(CYAN, TEAL, 24, 0.6, true);
           break;
         case "chain":
           doorT = 0;
-          doorRoot.position.z = -1.1; // behind her
+          doorRoot.position.z = -1.1;
+          reunionRoot.position.z = -1.1;
           doorRoot.setEnabled(true);
-          reveal.parent!.setEnabled(true);
-          burst(GOLD, new Color3(1, 0.95, 0.75), 36, 1.2);
+          reunionRoot.setEnabled(true);
+          burst(GOLD, ROSE, 28, 1.2);
           break;
         case "ultimate":
           earnT = 0;
           earnRoot.setEnabled(true);
-          wave.parent!.setEnabled(true);
-          burst(GOLD, CYAN, 70, 2.2);
+          waveRoot.setEnabled(true);
+          burst(GOLD, CYAN, 46, 2.2);
           break;
       }
     },

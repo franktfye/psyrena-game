@@ -242,6 +242,28 @@ Lessons from Erikson (2026-10-16):
 - m2mr placed the idle hand slightly higher than the source (across the nose,
   not on the moustache). Aim a little low for hand-to-face gestures.
 
+## 4c. Clip set from PINOC instead of m2mr (Piaget, Bandura, 2026-10-24)
+
+Stages 3–4 can be replaced by PINOC (the `pinoc` MCP server): free library
+clips for locomotion and text-to-motion for the casts (1 credit/s, 4 samples
+per prompt). PINOC's `mixamo-glb` is the X Bot on a 65-joint Mixamo skeleton
+in a true T-pose, so it retargets onto the 25-bone hero rig directly:
+
+```sh
+node tools/motion-video/pinoc-retarget.mjs pinoc.glb assets/work/<hero>/rig/character.glb \
+  ~/.cache/psyrena/anim/<hero>/pinoc/<clip>/mixamo_character.glb
+node tools/motion-video/finish-clips.mjs <hero> --character assets/work/<hero>/rig/character.glb \
+  --runs ~/.cache/psyrena/anim/<hero>/pinoc --out assets/work/<hero>/anim/glb --foot-fix off
+```
+
+The retarget writes m2mr's shape (character.glb + one clip), so finish-clips
+and ship-hero take it unchanged. `--foot-fix off`: the foot-pitch correction
+undoes an m2mr bias that a world-space retarget does not have. Cuts carry
+`"source": "pinoc"`; jump_start and jump_land are both cut from the library
+`Jump` (crouch to 0.57 s, takeoff, touchdown at 1.08 s). Picked samples and
+asset ids: `assets/work/<hero>/anim/pinoc.json`. PINOC characters are Gaussian
+splats, not meshes, so the model still comes from Tripo.
+
 ## 5. Ship to the game
 
 `finish-clips.mjs` output is not game-ready: it has Tripo's JPEG/PNG textures

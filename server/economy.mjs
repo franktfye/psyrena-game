@@ -17,10 +17,11 @@ import { logEvent } from "./events.mjs";
  * bosses_defeated, which practice runs never move). Skinner first, in course
  * order after the starter Pavlov — he has since joined DEFAULT_UNLOCKS in
  * app.mjs, so his row only matters for an account predating that. Erikson on
- * the second clear (Frank, 2026-10-18), Ainsworth on the third (2026-10-19).
+ * the second clear (Frank, 2026-10-18), Ainsworth on the third (2026-10-19),
+ * Piaget on the fourth and Bandura on the fifth (2026-10-24).
  * Admins hold every hero listed here from the start (app.mjs).
  */
-export const HERO_UNLOCK_WINS = { skinner: 1, erikson: 2, ainsworth: 3 };
+export const HERO_UNLOCK_WINS = { skinner: 1, erikson: 2, ainsworth: 3, piaget: 4, bandura: 5 };
 
 /** Every hero `bossesDefeated` ranked clears have earned, in table order. */
 export function earnedHeroUnlocks(bossesDefeated) {

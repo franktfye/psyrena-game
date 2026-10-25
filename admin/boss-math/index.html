@@ -588,11 +588,11 @@ const HEROES = [
     s2:{ name:"Spontaneous Recovery (team heal 93)", dmg:0, prov:"code" },
     s3:{ name:"Generalization", dmg:64, prov:"code" },
     s4:{ name:"Extinction", perMark:52, prov:"code" } },
-  { id:"bandura", name:"Bandura", role:"flex", kit:"palette", base:85, prov:"doc", borrow:0.8,
-    s1:{ name:"Observational (borrows ×0.8)", dmg:null, prov:"doc" },
-    s2:{ name:"Bobo Doll", dmg:null, prov:"design" },
-    s3:{ name:"Self-Efficacy", dmg:null, prov:"design" },
-    s4:{ name:"Reciprocal Determinism", perMark:130, prov:"doc" } },
+  { id:"bandura", name:"Bandura", role:"flex", kit:"palette", base:85, prov:"code", borrow:0.8,
+    s1:{ name:"Retention (copies ×0.8/×1.0)", dmg:292, prov:"code" },
+    s2:{ name:"Self-Efficacy", dmg:null, prov:"code" },
+    s3:{ name:"Bobo Doll", dmg:121, prov:"code" },
+    s4:{ name:"Reciprocal Determinism", perMark:90, prov:"code" } },
   { id:"erikson", name:"Erikson", role:"support", kit:"palette", base:75, prov:"doc",
     s1:{ name:"Resolve Crisis (8)", dmg:140, prov:"doc" },
     s2:{ name:"Moratorium", dmg:null, prov:"design" },
@@ -608,11 +608,11 @@ const HEROES = [
     s2:{ name:"Cultural Tools", dmg:null, prov:"design" },
     s3:{ name:"Private Speech", dmg:null, prov:"design" },
     s4:{ name:"Collective Mind (utility)", perMark:0, prov:"doc" } },
-  { id:"piaget", name:"Piaget", role:"tank", kit:"palette", base:65, prov:"doc",
-    s1:{ name:"Cognitive Stages (4)", dmg:150, prov:"doc" },
-    s2:{ name:"Schema Shield", dmg:null, prov:"design" },
-    s3:{ name:"Object Permanence", dmg:null, prov:"design" },
-    s4:{ name:"Equilibration", perMark:170, prov:"doc" } },
+  { id:"piaget", name:"Piaget", role:"healer", kit:"palette", base:60, prov:"code",
+    s1:{ name:"Cognitive Stages (4, heals 137)", dmg:0, prov:"code" },
+    s2:{ name:"Accommodation", dmg:null, prov:"code" },
+    s3:{ name:"Object Permanence", dmg:null, prov:"code" },
+    s4:{ name:"Equilibration (heals 80/Mark)", perMark:0, prov:"code" } },
   { id:"ainsworth", name:"Ainsworth", role:"tank", kit:"palette", base:65, prov:"doc",
     s1:{ name:"Attachment Styles (4)", dmg:135, prov:"doc" },
     s2:{ name:"Safe Haven", dmg:null, prov:"design" },
@@ -802,7 +802,7 @@ const GLOSSARY = {
   canonDrift: { t:"Canon drift", plain:"How far the derived number sits from the one already written in the design docs. Small drift means your budget agrees with canon; large drift means one of the two has to give.", math:"derived ÷ doc-03 value − 1, on S1 and the ult's per-Mark value." },
 };
 
-const DEFAULT_TEAM = ["piaget", "seligman", "freud", "kohlberg", "pavlov"];
+const DEFAULT_TEAM = ["ainsworth", "piaget", "freud", "kohlberg", "pavlov"];
 
 /* =============================== STATE =============================== */
 const S = {

@@ -666,7 +666,7 @@ export class ChatPanel {
         el: (() => {
           const line = document.createElement("div");
           line.style.cssText =
-            "font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%";
+            "font-size:10px;white-space:normal;overflow-wrap:anywhere;word-break:break-word;max-width:100%";
           const whisper = m.to !== undefined;
           const mine = m.from.toLowerCase() === this.social.me.toLowerCase();
           const who = document.createElement("span");
@@ -686,7 +686,7 @@ export class ChatPanel {
         el: (() => {
           const line = document.createElement("div");
           line.style.cssText =
-            "font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%";
+            "font-size:10px;white-space:normal;overflow-wrap:anywhere;word-break:break-word;max-width:100%";
           const tag = document.createElement("span");
           tag.textContent = "[World] ";
           tag.style.cssText = "color:#ffb84d";

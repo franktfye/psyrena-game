@@ -179,8 +179,9 @@ export interface SimAllySpec {
    *
    * ★ 2026-08-03: threat is stance-driven now (shared/combat.ts `THREAT`), so
    * a tank without one banks 1× and stops holding aggro. This field is what
-   * keeps the sim's hate table identical across that rule change; it goes away
-   * for real once Piaget's *Centration* ships as an authored kit (doc 07 #s-9).
+   * keeps the sim's hate table identical across that rule change. (Piaget's
+   * *Centration* stance never shipped: he became a healer on 2026-10-24 and
+   * Centration is his single-target heal now.)
    */
   threatStance?: ThreatStance;
 }

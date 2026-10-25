@@ -350,6 +350,7 @@ function hooksInto(events, members) {
     conditioningChanged: (state, who) => push({ e: "conditioning", state, who }),
     operantChanged: (state, who) => push({ e: "operant", state, who }),
     psychosocialChanged: (state, who) => push({ e: "psychosocial", state, who }),
+    modelingChanged: (state, who) => push({ e: "modeling", state, who }),
     playerHitReaction: (who) => push({ e: "flinch", who }),
     sfxEvent: (name, who) => push({ e: "sfx", name, who }),
     fightEnd: (stats) => push({ e: "end", stats }),
@@ -360,7 +361,7 @@ function hooksInto(events, members) {
 // Intents — the only thing a client is allowed to say
 // ---------------------------------------------------------------------------
 
-const KINDS = new Set(["basic", "palette", "defense", "chain", "ultimate", "stance"]);
+const KINDS = new Set(["basic", "palette", "defense", "chain", "ultimate", "stance", "model"]);
 
 /**
  * Latency grace on the cast timers, in seconds.
@@ -402,6 +403,11 @@ function applyIntent(session, member, body) {
   if (kind === "stance") {
     fight.setThreatStanceAs(member.actorId, !!body.on);
     return { ok: true, stance: fight.threatStanceActiveFor(member.actorId) };
+  }
+  // Bandura's model pin: free and off-GCD like the stance — attention is not a cast.
+  if (kind === "model") {
+    fight.cycleModelAs(member.actorId);
+    return { ok: true };
   }
 
   const hero = member.hero;
@@ -450,8 +456,10 @@ function applyIntent(session, member, body) {
     fight.castDefenseAs(who);
   } else if (kind === "ultimate") {
     const total = fight.castUltimateAs(who);
-    if (total <= 0) return refuse("no Marks");
-    fight.landUltimateAs(who, total);
+    // A healer's ultimate resolves for 0 damage (Shaping, Equilibration):
+    // that is a cast, and it pays its cooldown like one.
+    if (total <= 0 && !fight.ultimateResolvedAs(who)) return refuse("no Marks");
+    if (total > 0) fight.landUltimateAs(who, total);
     dealt = total;
   }
 

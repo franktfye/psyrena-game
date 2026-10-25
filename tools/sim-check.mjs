@@ -1069,3 +1069,287 @@ const { AINSWORTH } = await import(pathToFileURL(await bundle("shared/heroes/ain
   console.log(`\nscenario 11: gate · cleanse · Exploration · threat shed · stagger bled ${bled.toFixed(0)}/${want.toFixed(0)} · teammate sheltered, she is not · cooldown · taunt · heal cut 50% · Sensitivity +${answered}`);
   console.log("SCENARIO 11 (Ainsworth's attachment styles in the live sim): ALL CHECKS PASSED");
 }
+
+// ---------------------------------------------------------------------------
+// Scenario 12: Piaget on the healer row (Skinner's budget, weight 0.60), with
+// his own shares 20 basic / 30 palette / 15 E / 10 R / 25 F and every stage
+// the same EV — a stage is a delivery shape, not more throughput.
+// ---------------------------------------------------------------------------
+const { PIAGET, PIAGET_DEVELOPMENT } = await import(pathToFileURL(await bundle("shared/heroes/piaget.ts")).href);
+const PIAGET_SHARE = { s1: 0.3, s2: 0.15, s3: 0.1, s4: 0.25, s5: 0.2 };
+{
+  const w = PIAGET.baseDamage / 100;
+  console.log(`\nscenario 12: Piaget vs the healer row at weight ${w} (budget ${CONTRACT.budget * w}/s)`);
+  if (PIAGET.role !== "healer") fail(`Piaget's role is ${PIAGET.role}, but his numbers derive at the healer row`);
+  if (PIAGET.beats) fail("Piaget grew a beat cycle — his kit is flat");
+  if (Math.abs(Object.values(PIAGET_SHARE).reduce((a, b) => a + b, 0) - 1) > 1e-9) fail("Piaget's shares do not sum to 1");
+  const at = (slot) => (CONTRACT.budget * w * PIAGET_SHARE[slot]) / (CONTRACT.rates[slot] / 60);
+  exact("S5 Assimilation", PIAGET.basic.base, at("s5"));
+  for (const p of PIAGET.palette) {
+    const heal = p.effects.find((e) => ["heal.hot", "heal.single", "conservation", "shield.team"].includes(e.kind));
+    if (!heal) fail(`${p.name} carries no heal payload`);
+    exact(`S1 ${p.name}`, heal.magnitude, at("s1"));
+    if (p.base !== 0) fail(`${p.name} deals damage — his stages heal`);
+  }
+  exact("S2 Accommodation shield", PIAGET.defense.effects.find((e) => e.kind === "shield.team").magnitude, at("s2"));
+  exact("S3 Object Permanence heal", PIAGET.chain.effects.find((e) => e.kind === "ally.undying").magnitude, at("s3"));
+  const f = at("s4");
+  exact("S4 Equilibration direct heal", PIAGET.ultimate.heal, f * CONTRACT.ultimate.direct);
+  exact(
+    "S4 Equilibration per Mark",
+    PIAGET.ultimate.effects.find((e) => e.kind === "equilibration.release").magnitude,
+    (f * (1 - CONTRACT.ultimate.direct)) / (PIAGET.ultimate.maxMarksConsumed * CONTRACT.ultimate.foreignMix)
+  );
+  // The sequence price: a perfect 1→2→3→4 nets exactly four scaffold casts.
+  const keys = PIAGET.palette.reduce((n, p) => n + (p.focusCost ?? 8), 0);
+  if (keys - PIAGET_DEVELOPMENT.sequenceFocusRefund !== 4 * 8) {
+    fail(`a perfect sequence nets ${keys - PIAGET_DEVELOPMENT.sequenceFocusRefund} Focus, the heals are priced at ${4 * 8}`);
+  }
+  // Five forms, four stages: every form answered by exactly one stage.
+  const FORMS = ["age.infant", "age.toddler", "age.child", "age.school", "age.adolescent"];
+  for (const tag of FORMS) {
+    const n = PIAGET.palette.filter((p) => p.answersTags?.includes(tag)).length;
+    if (n !== 1) fail(`${tag} is answered by ${n} stages, not one`);
+  }
+  console.log("SCENARIO 12 (Piaget on the healer row of the role contract): ALL CHECKS PASSED");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 13: Piaget's stages in the live sim, two-player party — tag-based
+// Shapeshift answers (Preoperational answers two forms), the sequence refund,
+// heal-over-time, Centration, Conservation, shields (absorb, then Amp),
+// Object Permanence, and Equilibration as a 0-damage ultimate that resolves.
+// ---------------------------------------------------------------------------
+{
+  const realRandom = Math.random;
+  Math.random = () => 0.999;
+  const procs = [];
+  const focus = [];
+  const f = BossFight.forParty(
+    NIGHTMARE_STANDARD,
+    [
+      { id: "pia", name: "Piaget", hero: PIAGET, input: true },
+      { id: "mate", name: "Freud", hero: FREUD, input: true },
+    ],
+    { ...hooks, defenseProc: (n) => procs.push(n), gainFocus: (n, who) => focus.push({ n, who }) }
+  );
+  for (let i = 0; i < Math.ceil((NIGHTMARE_STANDARD.idleS + 1) / DT); i++) f.tick(DT);
+  f.nextOutgoingAt = 1e9;
+  const P = f.actorBy("pia");
+  const M = f.actorBy("mate");
+  const run = (s) => { for (let i = 0; i < Math.round(s / DT); i++) f.tick(DT); };
+
+  // Sequence: 1 2 3 4 refunds once; 1 3 does not.
+  f.castPaletteAs("pia", 0, 1);
+  f.castPaletteAs("pia", 1, 1);
+  f.castPaletteAs("pia", 2, 1);
+  f.castPaletteAs("pia", 3, 1);
+  if (focus.length !== 1 || focus[0].n !== PIAGET_DEVELOPMENT.sequenceFocusRefund) fail(`in-order stages refunded ${JSON.stringify(focus)}`);
+  run(3);
+  f.castPaletteAs("pia", 0, 1);
+  f.castPaletteAs("pia", 2, 1);
+  f.castPaletteAs("pia", 1, 1);
+  f.castPaletteAs("pia", 3, 1);
+  if (focus.length !== 1) fail("an out-of-order run refunded Focus");
+  run(9); // let the shields from key 4 lapse
+
+  // Centration: all of it on the most wounded.
+  M.hp = M.hpMax - 500;
+  P.hp = P.hpMax - 100;
+  const m0 = M.hp, p0 = P.hp;
+  f.castPaletteAs("pia", 1, 1);
+  if (Math.abs(M.hp - m0 - 137) > 1e-6 || P.hp !== p0) fail(`Centration healed Freud ${M.hp - m0}, Piaget ${P.hp - p0}`);
+
+  // Circular Reaction: nothing now, 137 over the next 6 s, on the most wounded.
+  const m1 = M.hp;
+  f.castPaletteAs("pia", 0, 1);
+  if (M.hp !== m1) fail("Circular Reaction healed up front");
+  run(6.2);
+  if (Math.abs(M.hp - m1 - 137) > 0.5) fail(`Circular Reaction healed ${(M.hp - m1).toFixed(1)} over 6 s, not 137`);
+
+  // Conservation: HP shared out evenly (same fraction), then the team heal.
+  M.hp = 200;
+  P.hp = 1000;
+  f.castPaletteAs("pia", 2, 1);
+  if (Math.abs(M.hp / M.hpMax - P.hp / P.hpMax) > 1e-6) fail(`Conservation left ${M.hp} vs ${P.hp}`);
+  if (Math.abs(M.hp + P.hp - (1200 + 137)) > 1) fail(`Conservation total ${M.hp + P.hp}, not 1200 + 137`);
+  if (!procs.includes("Conserved")) fail("Conservation floated nothing");
+
+  // Hypothetical: a shield soaks the hit, the rest fades into Amp.
+  M.hp = M.hpMax;
+  f.castPaletteAs("pia", 3, 1);
+  const each = 137 / 2;
+  const mit = f.mitigationFor(M);
+  f.hitCombatant(M, 40 / (1 - mit));
+  if (M.hp !== M.hpMax) fail("a hit smaller than the shield reached HP");
+  const amp0 = f.amp;
+  run(8.2);
+  if (!(f.amp > amp0)) fail("the unspent shield paid no Amp on expiry");
+  if (M.shields.length !== 0) fail("the shield outlived its 8 s");
+  void each;
+
+  // Object Permanence: no lower than 1 HP for 4 s, then the heal.
+  run(1);
+  M.hp = 50;
+  P.hp = P.hpMax;
+  f.castChainAs("pia", 1);
+  f.hitCombatant(M, 5_000);
+  if (M.hp !== 1 || !M.alive) fail(`Object Permanence let Freud fall to ${M.hp}`);
+  run(4.2);
+  if (Math.abs(M.hp - 1 - 143) > 1e-6) fail(`Object Permanence released ${M.hp - 1}, not 143`);
+  f.hitCombatant(M, 5_000);
+  if (M.alive) fail("Object Permanence held past its window");
+
+  // Equilibration: 0 damage, resolves, heals 257 + 80 per Mark.
+  P.hp = P.hpMax - 900;
+  const marks = f.marks.length;
+  const ph = P.hp;
+  const dmg = f.castUltimateAs("pia");
+  if (dmg !== 0) fail(`Equilibration dealt ${dmg} damage`);
+  if (!f.ultimateResolvedAs("pia")) fail("a 0-damage ultimate did not count as resolved");
+  const spent = Math.min(marks, PIAGET.ultimate.maxMarksConsumed);
+  if (Math.abs(P.hp - ph - (257 + 80 * spent)) > 1e-6) fail(`Equilibration healed the lone survivor ${P.hp - ph}, want ${257 + 80 * spent}`);
+
+  // Shapeshift: tag answers. Preoperational is right for the toddler AND the child.
+  const g = BossFight.forParty(NIGHTMARE_STANDARD, [{ id: "pia", name: "Piaget", hero: PIAGET, input: true }], { ...hooks });
+  for (let i = 0; i < Math.ceil((NIGHTMARE_STANDARD.idleS + 1) / DT); i++) g.tick(DT);
+  g.enterPhase("p2");
+  const answer = (stage, key) => { g.notifyP2Stage(stage); g.actorBy("pia").fixationUntil = -1; return g.castPaletteAs("pia", key, 1); };
+  for (const [stage, key] of [[0, 0], [1, 1], [2, 1], [3, 2], [4, 3]]) {
+    const h = answer(stage, key);
+    if (!h?.grantsDebuffStack) fail(`stage ${stage} answered with key ${key + 1} was not right`);
+  }
+  const wrong = answer(1, 0);
+  if (wrong?.grantsDebuffStack) fail("Sensorimotor answered the toddler");
+
+  Math.random = realRandom;
+  console.log(`\nscenario 13: sequence refund once · Centration · Circular Reaction 137/6 s · Conservation evens · shield soaks then Amp · Object Permanence 1 HP then +143 · Equilibration resolves at 0 damage · 5 forms / 4 stages answered`);
+  console.log("SCENARIO 13 (Piaget's stages in the live sim): ALL CHECKS PASSED");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 14: Bandura on the flex row (weight 0.85, DPS shares), with the
+// palette priced at the reference motivation mix.
+// ---------------------------------------------------------------------------
+const { BANDURA, BANDURA_MODELING } = await import(pathToFileURL(await bundle("shared/heroes/bandura.ts")).href);
+const DPS_SHARE = { s1: 0.4, s2: 0.09, s3: 0.06, s4: 0.2, s5: 0.25 };
+{
+  const w = BANDURA.baseDamage / 100;
+  console.log(`\nscenario 14: Bandura vs the flex row at weight ${w} (budget ${CONTRACT.budget * w}/s)`);
+  if (BANDURA.role !== "flex") fail(`Bandura's role is ${BANDURA.role}`);
+  if (BANDURA.beats) fail("Bandura grew a beat cycle");
+  const at = (slot) => (CONTRACT.budget * w * DPS_SHARE[slot]) / (CONTRACT.rates[slot] / 60);
+  exact("S5 Modeled Aggression", BANDURA.basic.base, at("s5"));
+  const ms = BANDURA_MODELING;
+  const mix = 0.5 * ms.motivatedMult + 0.45 * ms.unmotivatedMult + 0.05 * ms.emptyMult;
+  for (const p of BANDURA.palette) exact(`S1 ${p.name} (mean ×${mix.toFixed(3)})`, p.base, at("s1") / mix);
+  if (BANDURA.palette.length !== ms.slots) fail("palette keys and retention slots disagree");
+  exact("S2 Self-Efficacy heal", BANDURA.defense.heal, at("s2"));
+  exact("S3 Bobo Doll", BANDURA.chain.base, at("s3"));
+  const f = at("s4");
+  exact("S4 Reciprocal Determinism direct", BANDURA.ultimate.base, f * CONTRACT.ultimate.direct);
+  exact(
+    "S4 Reciprocal Determinism per Mark",
+    BANDURA.ultimate.perMark,
+    (f * (1 - CONTRACT.ultimate.direct)) / (BANDURA.ultimate.maxMarksConsumed * CONTRACT.ultimate.foreignMix)
+  );
+  console.log("SCENARIO 14 (Bandura on the flex row of the role contract): ALL CHECKS PASSED");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 15: Bandura's observational learning in the live sim — attention
+// follows salience (and a pin), retention fills from the model's casts,
+// reproduction pays HIS base at the motivation rate and spends the slot,
+// rehearsal on an empty slot, a copied heal keeps its shape at his number,
+// solo he models the boss, the Bobo doll soaks and rebounds, copies fade.
+// ---------------------------------------------------------------------------
+{
+  const realRandom = Math.random;
+  Math.random = () => 0.999; // no crits: Freud's copies are unmotivated unless answered right
+  const states = [];
+  const f = BossFight.forParty(
+    NIGHTMARE_STANDARD,
+    [
+      { id: "ban", name: "Bandura", hero: BANDURA, input: true },
+      { id: "fre", name: "Freud", hero: FREUD, input: true },
+      { id: "pia", name: "Piaget", hero: PIAGET, input: true },
+    ],
+    { ...hooks, modelingChanged: (s, who) => who === "ban" && states.push(s) }
+  );
+  if (!states.length || states.at(-1).slots.some((x) => x !== null)) fail("Bandura opened without four empty slots on the HUD");
+  for (let i = 0; i < Math.ceil((NIGHTMARE_STANDARD.idleS + 1) / DT); i++) f.tick(DT);
+  f.nextOutgoingAt = 1e9;
+  const B = f.actorBy("ban");
+  const run = (s) => { for (let i = 0; i < Math.round(s / DT); i++) f.tick(DT); };
+
+  // Attention: Freud deals damage, so Freud is the model.
+  f.landHitAs("fre", f.castPaletteAs("fre", 0, 1));
+  if (f.modelOf(B)?.id !== "fre") fail(`Bandura watches ${f.modelOf(B)?.id}, not the salient Freud`);
+  // Retention: Freud's next casts fill slots.
+  f.castPaletteAs("fre", 1, 1);
+  f.castChainAs("fre", 1);
+  const held = states.at(-1).slots.filter(Boolean).map((s) => s.id);
+  for (const id of ["freud.stage.oral", "freud.stage.anal", "freud.free-association"]) if (!held.includes(id)) fail(`${id} was not retained (${held})`);
+  // Reproduction: his base × 0.8 (unmotivated), and the slot empties.
+  const slotOf = (id) => B.retained.findIndex((r) => r?.view.id === id);
+  const k = slotOf("freud.stage.anal");
+  const copy = f.castPaletteAs("ban", k, 1);
+  const want = f.resolveHitFor ? 0 : null;
+  void want;
+  const plain = (base) => resolveHit({ base, beat: 1, marks: f.marks.length - 0, amp: f.amp, gear: 1, format: "match", isSkill: true });
+  if (Math.abs(copy.damage - plain(292 * 0.8)) > 1e-6) fail(`an unmotivated copy dealt ${copy.damage}, want ${plain(292 * 0.8)}`);
+  if (B.retained[k] !== null) fail("the reproduced slot was not spent");
+  // Rehearsal: the empty slot still swings at half.
+  const reh = f.castPaletteAs("ban", k, 1);
+  if (Math.abs(reh.damage - plain(292 * 0.5)) > 1e-6) fail(`rehearsal dealt ${reh.damage}, want ${plain(292 * 0.5)}`);
+
+  // Pin Piaget, watch a Centration, copy it: one target healed for HIS base.
+  f.setModelAs("ban", "pia");
+  if (f.modelOf(B)?.id !== "pia" || !states.at(-1).pinned) fail("the pin did not move attention to Piaget");
+  f.castPaletteAs("pia", 1, 1);
+  const j = slotOf("piaget.preoperational");
+  if (j < 0) fail("Centration was not retained");
+  const fre = f.actorBy("fre");
+  fre.hp = fre.hpMax - 600;
+  const h0 = fre.hp;
+  const healCopy = f.castPaletteAs("ban", j, 1);
+  if (healCopy.damage !== 0) fail("a copied heal dealt damage");
+  if (Math.abs(fre.hp - h0 - 292 * 0.8) > 1e-6) fail(`the copied Centration healed ${fre.hp - h0}, want ${292 * 0.8}`);
+  f.setModelAs("ban", null);
+
+  // Motivation: a copy of a right Shapeshift answer pays the full rate.
+  f.enterPhase("p2");
+  f.notifyP2Stage(0);
+  f.setModelAs("ban", "fre");
+  f.castPaletteAs("fre", 0, 1); // oral answers the infant: rewarded
+  const mk = slotOf("freud.stage.oral");
+  if (!B.retained[mk]?.view.motivated) fail("a right answer was not retained as motivated");
+  const full = f.castPaletteAs("ban", mk, 1);
+  if (!full.grantsDebuffStack) fail("Bandura's reproduction did not count as right during Shapeshift");
+  f.enterPhase("p1");
+  f.nextOutgoingAt = 1e9;
+
+  // Fade: unrehearsed copies are gone after retentionMs.
+  f.castPaletteAs("fre", 2, 1);
+  run(BANDURA_MODELING.retentionMs / 1000 + 0.5);
+  if (B.retained.some((r) => r !== null)) fail("retained copies outlived their 20 s");
+
+  // Solo: nobody to watch, so the boss's blows fill the slots.
+  const s = BossFight.forParty(NIGHTMARE_STANDARD, [{ id: "ban", name: "Bandura", hero: BANDURA, input: true }], { ...hooks });
+  for (let i = 0; i < Math.ceil((NIGHTMARE_STANDARD.idleS + 3) / DT); i++) s.tick(DT);
+  const SB = s.actorBy("ban");
+  if (!SB.retained.some((r) => r?.view.id === "boss.strike" && r.view.motivated)) fail("solo Bandura did not model the boss's blow");
+  // Bobo Doll: the next single-target blow hits the doll; half rebounds at the end.
+  s.castChainAs("ban", 1);
+  const hpB = SB.hp;
+  const bossHp = s.hp;
+  s.bossStrike(100, "threat");
+  if (SB.hp !== hpB) fail("the blow reached Bandura through the doll");
+  for (let i = 0; i < Math.round(4.2 / DT); i++) s.tick(DT);
+  const rebound = 100 * s.dmgMult * s.sizeMult * BANDURA.chain.effects[0].magnitude;
+  if (!(bossHp - s.hp >= rebound - 1e-6)) fail(`the doll rebounded ${(bossHp - s.hp).toFixed(1)}, want ≥ ${rebound}`);
+
+  Math.random = realRandom;
+  console.log(`\nscenario 15: attention · retention · copy ×0.8 spent · rehearsal ×0.5 · pinned Centration copy heals ${Math.round(292 * 0.8)} · motivated right answer · copies fade · solo models the boss · Bobo doll soaks and rebounds`);
+  console.log("SCENARIO 15 (Bandura's observational learning in the live sim): ALL CHECKS PASSED");
+}

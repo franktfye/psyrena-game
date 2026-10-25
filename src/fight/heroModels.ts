@@ -6,4 +6,4 @@
  * `tools/verify-hero-assets.mjs` (end of `npm run build`) fails if this set and
  * the rigged glbs in public/assets/heroes/ disagree.
  */
-export const MODELED_HEROES: ReadonlySet<string> = new Set(["freud", "pavlov", "skinner", "erikson", "ainsworth"]);
+export const MODELED_HEROES: ReadonlySet<string> = new Set(["freud", "pavlov", "skinner", "erikson", "ainsworth", "piaget", "bandura"]);

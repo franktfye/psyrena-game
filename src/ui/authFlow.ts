@@ -60,7 +60,8 @@ export const ROSTER: { id: string; name: string; epithet: string; role: string; 
   { id: "bronfenbrenner", name: "Bronfenbrenner", epithet: "The Ecologist", role: "Support", img: "bronfenbrenner_sketch.webp" },
   { id: "vygotsky", name: "Vygotsky", epithet: "The Scaffolder", role: "Support", img: "vygotsky_sketch.webp" },
   { id: "erikson", name: "Erikson", epithet: "The Life Cycle", role: "DPS", img: "erikson_sketch.webp" },
-  { id: "piaget", name: "Piaget", epithet: "The Constructor", role: "Tank", img: "piaget_sketch.webp" },
+  // Healer since 2026-10-24: his four stages heal the way each stage thinks.
+  { id: "piaget", name: "Piaget", epithet: "The Constructor", role: "Healer", img: "piaget_sketch.webp" },
   { id: "maslow", name: "Maslow", epithet: "The Provider", role: "Healer", img: "maslow_sketch.webp" },
   { id: "seligman", name: "Seligman", epithet: "The Optimist", role: "Healer", img: "seligman_sketch.webp" },
   // Hidden from the picker for now — re-add when their kits land.
@@ -86,6 +87,8 @@ const CONCEPT_FULL_BODY: Record<string, string> = {
   skinner: "skinner_concept_full.webp",
   erikson: "erikson_concept_full.webp",
   ainsworth: "ainsworth_concept_full.webp",
+  piaget: "piaget_concept_full.webp",
+  bandura: "bandura_concept_full.webp",
 };
 
 /** WoW-class-style accent color per role, used on role labels in the picker. */
@@ -147,6 +150,12 @@ const CSS = `
 #auth button.cta:hover:not(:disabled) { filter: brightness(1.25); }
 #auth button.cta:disabled { opacity: .35; cursor: default; }
 #auth .err { color: #ff8896; font-size: 12px; min-height: 18px; text-align: center; }
+#auth .load { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px;
+  font-size: 11px; letter-spacing: .04em; color: #b9b2a2; opacity: .9; cursor: default; }
+#auth .load .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b6b6b; box-shadow: 0 0 6px currentColor; }
+#auth .load .bar { width: 64px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.12); overflow: hidden; }
+#auth .load .fill { height: 100%; width: 0; transition: width .6s ease, background .6s ease; }
+#auth .load-full { color: #ff8896; font-size: 11px; text-align: center; margin-top: 4px; }
 #auth .swap {
   background: none; border: none; padding: 4px; color: #8fd8e8; cursor: pointer;
   font: inherit; font-size: 12px; text-decoration: underline; text-underline-offset: 3px;
@@ -477,6 +486,64 @@ function showHomescreenPopup(root: HTMLElement): void {
   root.append(pop);
 }
 
+/**
+ * The login screen's server-load pill: a dot, a bar and a word, from
+ * `GET /api/server/load` (server/serverLoad.mjs — the worst of CPU, memory
+ * and event-loop lag). At 90% the server calls itself full (Frank,
+ * 2026-10-24: "to be safe, 90% = server full") and the pill says so with a
+ * line underneath. It informs; it does not lock the door — the reading is a
+ * heuristic, and a student mid-class should still be able to try.
+ *
+ * Polls every 15 s while the pill is on screen and stops by itself once the
+ * login screen is replaced (no timer outlives its element).
+ */
+function serverLoadPill(): HTMLElement {
+  const dot = el("span", { class: "dot" });
+  const fill = el("div", { class: "fill" });
+  const word = el("span", {}, "Server: checking…");
+  const pill = el("div", { class: "load", role: "status", "aria-live": "polite" },
+    dot, word, el("div", { class: "bar" }, fill));
+  const note = el("div", { class: "load-full" });
+  note.style.display = "none";
+  const wrap = el("div", {}, pill, note);
+
+  const LEVELS = [
+    { below: 0.5, label: "Quiet", color: "#5fd27a" },
+    { below: 0.75, label: "Busy", color: "#e6cf5a" },
+    { below: 0.9, label: "Very busy", color: "#f0954a" },
+    { below: Infinity, label: "Full", color: "#ff5f6d" },
+  ];
+  const paint = (r: { load: number; cpu: number; mem: number; loop: number; full: boolean }): void => {
+    const lvl = r.full ? LEVELS[3]! : LEVELS.find((l) => r.load < l.below)!;
+    const pct = Math.round(r.load * 100);
+    word.textContent = `Server: ${lvl.label} · ${pct}%`;
+    dot.style.background = lvl.color;
+    dot.style.color = lvl.color;
+    fill.style.width = `${Math.min(100, pct)}%`;
+    fill.style.background = lvl.color;
+    pill.title = `CPU ${Math.round(r.cpu * 100)}% · memory ${Math.round(r.mem * 100)}% · responsiveness ${Math.round(r.loop * 100)}%`;
+    note.textContent = r.full ? "The server is full right now. You can still log in, but expect lag — try again in a few minutes." : "";
+    note.style.display = r.full ? "" : "none";
+  };
+  const poll = (): void => {
+    if (!wrap.isConnected && started) return; // the login screen is gone: stop
+    void api<{ load: number; cpu: number; mem: number; loop: number; full: boolean }>("/api/server/load")
+      .then(paint)
+      .catch(() => {
+        word.textContent = "Server: unreachable";
+        dot.style.background = "#6b6b6b";
+        fill.style.width = "0";
+      })
+      .finally(() => window.setTimeout(poll, 15_000));
+  };
+  let started = false;
+  queueMicrotask(() => {
+    started = true;
+    poll();
+  });
+  return wrap;
+}
+
 function loginScreen(root: HTMLElement): Promise<Profile> {
   return new Promise((resolve) => {
     let mode: "login" | "register" = "login";
@@ -557,12 +624,14 @@ function loginScreen(root: HTMLElement): Promise<Profile> {
       }
     });
 
+    const load = serverLoadPill();
     root.replaceChildren(
       el("div", { class: "panel" },
         el("img", { class: "logo", src: "/assets/login/logo.webp", alt: "Psyrena crest" }),
         el("div", { class: "wordmark" }, "PSYRENA"),
         el("div", { class: "tagline" }, "WHERE THEORIES DO BATTLE"),
         form,
+        load,
       ),
     );
     user.focus();

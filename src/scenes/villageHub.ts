@@ -4809,6 +4809,57 @@ const AINSWORTH_VOICE: HeroVoicePack = {
   },
 };
 
+/**
+ * Piaget: a gentle Swiss-French grandfather, designed then cloned
+ * (tools/gen-piaget-voice.sh). Keys 1–4 think like each stage — the infant's
+ * "again!", the preoperational fixation, conservation, the hypothetical — and
+ * were re-rolled to fit the GCD; jokes and history sit on E/R/F and the idles.
+ */
+const PIAGET_VOICE: HeroVoicePack = {
+  base: `${VOICE_BASE}/piaget`,
+  museName: "Piaget",
+  cast: {
+    "piaget.sensorimotor": "cast_sensorimotor",
+    "piaget.preoperational": "cast_preoperational",
+    "piaget.concrete": "cast_concrete",
+    "piaget.formal": "cast_formal",
+    "piaget.accommodation": "cast_accommodation",
+    "piaget.object-permanence": "cast_object_permanence",
+    "piaget.equilibration": "cast_equilibration",
+  },
+  idle: ["idle_01", "idle_02", "idle_03"],
+  captions: {
+    idle_01: "I published my first paper at ten. On an albino sparrow. The reviewers did not know I was ten.",
+    idle_02: "I studied my own three children. Very cooperative subjects. They never read the consent forms.",
+    idle_03: "Every morning I cycle to the university with my pipe, thinking. Mostly about snails.",
+  },
+};
+
+/**
+ * Bandura: a bright Alberta tenor, designed then cloned
+ * (tools/gen-bandura-voice.sh). Keys 1–4 hold copies of his model's skills,
+ * so their lines are about the COPYING, one per retention slot.
+ */
+const BANDURA_VOICE: HeroVoicePack = {
+  base: `${VOICE_BASE}/bandura`,
+  museName: "Bandura",
+  cast: {
+    "bandura.observe-1": "cast_observe_1",
+    "bandura.observe-2": "cast_observe_2",
+    "bandura.observe-3": "cast_observe_3",
+    "bandura.observe-4": "cast_observe_4",
+    "bandura.self-efficacy": "cast_self_efficacy",
+    "bandura.bobo-doll": "cast_bobo_doll",
+    "bandura.reciprocal-determinism": "cast_reciprocal_determinism",
+  },
+  idle: ["idle_01", "idle_02", "idle_03"],
+  captions: {
+    idle_01: "I grew up in a town of four hundred people. Two teachers for the whole high school. We taught ourselves.",
+    idle_02: "The Bobo doll got punched a few thousand times for science. He is fine. He bounces back.",
+    idle_03: "I took my first psychology course because it fit my car-pool schedule. Best accident of my life.",
+  },
+};
+
 /** Unknown ids fall back to Freud — same rule `heroById` applies to the rig. */
 const VOICE_PACKS: Record<string, HeroVoicePack> = {
   freud: FREUD_VOICE,
@@ -4816,6 +4867,8 @@ const VOICE_PACKS: Record<string, HeroVoicePack> = {
   skinner: SKINNER_VOICE,
   erikson: ERIKSON_VOICE,
   ainsworth: AINSWORTH_VOICE,
+  piaget: PIAGET_VOICE,
+  bandura: BANDURA_VOICE,
 };
 
 /**
@@ -5808,7 +5861,7 @@ export function setupSkillBar(
             ? "Significant\nRelations"
             : kit.id === "ainsworth"
               ? "Sensitivity"
-              : "Id\nAttack",
+              : wrapLabel(kit.basic.name),
     tooltip: kit.psychosocial
       ? `Add-on attack. Flat ${kit.basic.base} damage, once after each key 1 or key 2. Left click.`
       : kit.beats
@@ -5832,7 +5885,11 @@ export function setupSkillBar(
       id: p.id,
       key: String(i + 1),
       label: p.name.replace(" Stage", "").split(" — ")[0] ?? p.name,
-      tooltip: p.answersAxis
+      tooltip: p.answersTags
+        ? `${p.name}. A stage of development: it heals the way a child at this stage thinks. In a fight it also answers the boss's ${p.answersTags.length > 1 ? "forms" : "form"} of that age. The full effect is in the codex and on the arena bar.`
+        : p.effects.some((e) => e.kind === "modeling.reproduce")
+          ? `${p.name}. In a fight this slot holds a copy of a skill your model cast; press it to reproduce the copy. Here in town it is empty.`
+          : p.answersAxis
         ? `${p.name}. Deals ${p.base} damage and places an Analysis Mark. While the boss shapeshifts: the correct answer when it takes the form of ${STAGE_DETAIL[p.id]?.form ?? "this stage"} — outside the transformation no stage is wrong.`
         : kit.psychosocial
           ? p.effects.some((e) => e.kind === "psychosocial.stage")
@@ -6171,7 +6228,7 @@ export function setupSkillBar(
     {
       layout: touch ? "touch" : "bar",
       // The touch cluster's word for the wheel — Skinner's is "Schedules".
-      paletteWord: kit.reinforcement ? "Schedules" : undefined,
+      paletteWord: kit.reinforcement ? "Schedules" : kit.modeling ? "Copies" : undefined,
       // Erikson's 1 and 2 are a rhythm, not a menu — two direct buttons.
       paletteInline: kit.psychosocial !== undefined,
       // Same Focus gate as the arena: an empty pool refuses the press (red

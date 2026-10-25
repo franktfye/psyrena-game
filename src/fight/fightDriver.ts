@@ -33,6 +33,7 @@ import type {
   FightHooks,
   FightPhaseState,
   FightSnapshot,
+  ModelingHudState,
   OperantHudState,
   PsychosocialHudState,
   SfxName,
@@ -97,6 +98,10 @@ export interface FightDriver {
   readonly operant: OperantHudState | null;
   /** Erikson's rotation as the fight last reported it; null for other kits. */
   readonly psychosocial: PsychosocialHudState | null;
+  /** Bandura's model and retention slots as last reported; null for other kits. */
+  readonly modeling: ModelingHudState | null;
+  /** Bandura: move the model pin on (automatic → each teammate → automatic). */
+  cycleModel(): void;
   /**
    * The boss model reporting the P2 form it is showing. Local only: the sim
    * has no stage clock of its own and learns the answer this way. In remote
@@ -188,7 +193,7 @@ export class LocalFightDriver implements FightDriver {
     }
     if (kind === "ultimate") {
       const total = this.fight.castUltimateAs(this.actorId);
-      if (total <= 0) return { ok: false, why: "no Marks", dealt: 0, crit: false };
+      if (total <= 0 && !this.fight.ultimateResolvedAs(this.actorId)) return { ok: false, why: "no Marks", dealt: 0, crit: false };
       return {
         ok: true,
         dealt: total,
@@ -228,6 +233,14 @@ export class LocalFightDriver implements FightDriver {
 
   get psychosocial(): PsychosocialHudState | null {
     return this.fight.psychosocialFor(this.actorId);
+  }
+
+  get modeling(): ModelingHudState | null {
+    return this.fight.modelingFor(this.actorId);
+  }
+
+  cycleModel(): void {
+    this.fight.cycleModelAs(this.actorId);
   }
 
   notifyP2Stage(stage: number): void {
@@ -299,6 +312,7 @@ type WireEvent =
   | { e: "conditioning"; state: ConditioningHudState; who?: string }
   | { e: "operant"; state: OperantHudState; who?: string }
   | { e: "psychosocial"; state: PsychosocialHudState; who?: string }
+  | { e: "modeling"; state: ModelingHudState; who?: string }
   | { e: "flinch"; who?: string }
   | { e: "sfx"; name: SfxName; who?: string }
   | { e: "end"; stats: FightEndStats };
@@ -386,6 +400,7 @@ export class RemoteFightDriver implements FightDriver {
   private fallback: LocalFightDriver | null = null;
   private operantState: OperantHudState | null;
   private psychosocialState: PsychosocialHudState | null;
+  private modelingState: ModelingHudState | null = null;
   /** Optimistic until the next frame confirms it — a stance must feel instant. */
   private stance = false;
 
@@ -569,6 +584,12 @@ export class RemoteFightDriver implements FightDriver {
             h.psychosocialChanged?.(ev.state);
           }
           break;
+        case "modeling":
+          if (mine(ev.who)) {
+            this.modelingState = ev.state;
+            h.modelingChanged?.(ev.state);
+          }
+          break;
         case "flinch":
           if (mine(ev.who)) h.playerHitReaction();
           break;
@@ -647,6 +668,17 @@ export class RemoteFightDriver implements FightDriver {
 
   get psychosocial(): PsychosocialHudState | null {
     return this.fallback ? this.fallback.psychosocial : this.psychosocialState;
+  }
+
+  get modeling(): ModelingHudState | null {
+    return this.fallback ? this.fallback.modeling : this.modelingState;
+  }
+
+  cycleModel(): void {
+    if (this.fallback) return this.fallback.cycleModel();
+    void post("/api/fight/sim/intent", { kind: "model" }).catch((err) =>
+      console.warn("[fight] model intent failed:", err)
+    );
   }
 
   notifyP2Stage(stage: number): void {

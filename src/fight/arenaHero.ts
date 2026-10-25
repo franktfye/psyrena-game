@@ -98,7 +98,7 @@ export { MODELED_HEROES };
  * bar shows text faces — a missing set would be one 404 per button, and a
  * blank tile reads worse than a label.
  */
-export const SKILL_ICON_HEROES = new Set(["freud", "pavlov", "skinner", "erikson", "ainsworth"]);
+export const SKILL_ICON_HEROES = new Set(["freud", "pavlov", "skinner", "erikson", "ainsworth", "piaget", "bandura"]);
 
 /**
  * The threat stance's bar key: "4" (Pavlov's one palette button leaves 2-5
