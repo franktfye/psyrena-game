@@ -33,6 +33,7 @@ export interface MusicTrack {
  * that appears in no scene list plays only when the player picks it.
  */
 export const MUSIC_TRACKS: readonly MusicTrack[] = [
+  { id: "ballroom_of_blades", label: "Ballroom of Blades", src: audioUrl("/assets/village/ost/ballroom_of_blades") },
   { id: "firelight_1", label: "Firelight 1", src: audioUrl("/assets/village/ost/firelight_1") },
   { id: "firelight_2", label: "Firelight 2", src: audioUrl("/assets/village/ost/firelight_2") },
   { id: "kinetic_glass_loop", label: "Kinetic Glass", src: audioUrl("/assets/village/ost/kinetic_glass_loop") },

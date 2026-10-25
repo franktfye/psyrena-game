@@ -29,6 +29,7 @@
 import type {
   BossFanView,
   BossFight,
+  BossOrbsView,
   ConditioningHudState,
   FightEndStats,
   FightHooks,
@@ -289,6 +290,7 @@ type WireEvent =
   | { e: "phase"; phase: FightPhaseState }
   | { e: "strike"; targets: "threat" | "all" }
   | { e: "fan"; fan: BossFanView }
+  | { e: "orbs"; volley: BossOrbsView }
   | { e: "dmgPlayer"; n: number; who?: string }
   | { e: "healPlayer"; n: number; who?: string }
   | { e: "hurt"; name: string; amount: number; isPlayer: boolean; who?: string }
@@ -541,6 +543,9 @@ export class RemoteFightDriver implements FightDriver {
           break;
         case "fan":
           h.bossFan?.({ ...ev.fan, targetIsPlayer: mine(ev.fan.targetId) });
+          break;
+        case "orbs":
+          h.bossOrbs?.({ ...ev.volley, orbs: ev.volley.orbs.map((o) => ({ ...o, anchorIsPlayer: mine(o.anchorId) })) });
           break;
         case "dmgPlayer":
           if (mine(ev.who)) h.damagePlayer(ev.n);

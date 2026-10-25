@@ -758,7 +758,7 @@ function renderSystem(wrap: HTMLElement): void {
       popTitle(root, "Music");
       popLine(
         root,
-        "Auto plays each area's own soundtrack: the village rotates its five tracks, the practice booth keeps its violet loop, and the boss fight rolls a siege loop on entry."
+        "Auto plays each area's own soundtrack: the village rotates its six tracks (opening on Ballroom of Blades), the practice booth keeps its violet loop, and the boss fight rolls a siege loop on entry."
       );
       popLine(
         root,

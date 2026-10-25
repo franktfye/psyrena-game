@@ -4904,6 +4904,7 @@ const IDLE_BUSY_GRACE_S = 0.55;
 const VILLAGE_OST_BASE = "/assets/village/ost";
 /** Firelight 1, Firelight 2, Kinetic Glass, Kinetic Glass Origin, Melody of the Glass City — played in order, then wrap. */
 const VILLAGE_OST_TRACKS = [
+  "ballroom_of_blades", // first: the town opens on it (added 2026-10-25)
   "firelight_1",
   "firelight_2",
   "kinetic_glass_loop",

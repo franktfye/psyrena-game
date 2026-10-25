@@ -34,14 +34,8 @@
 import { DIFFICULTY, setDifficulty, getDifficulty, type FightDifficulty } from "../fight/difficulty";
 import { compReminder } from "@shared/teamComp";
 import { heroById } from "@shared/heroes";
-import {
-  soloQueueSheet,
-  teamQueueSheet,
-  practiceSheet,
-  type Lobby,
-  type Sheet,
-  type SheetDeps,
-} from "./queueSheets";
+// The sheets load on the first door press (CLAUDE.md rule 2); only their types are boot.
+import type { Lobby, Sheet } from "./queueSheets";
 import {
   WOW_FONT, WOW_CARD, WOW_CTA, WOW_CTA_HOVER, WOW_BTN, WOW_BTN_HOVER,
   WOW_ROW, WOW_INPUT, WOW_INPUT_FOCUS, WOW_GOLD_TEXT, WOW_TEXT_DIM,
@@ -440,11 +434,12 @@ export function openRoomsPanel(opts: RoomsPanelOptions = configured): void {
     sheet = null;
     return true;
   };
-  const openSheet = (build: (deps: SheetDeps) => Sheet): void => {
-    if (!current) return;
-    closeSheet();
-    err.textContent = "";
-    sheet = build({
+  const openSheet = (which: "soloQueueSheet" | "teamQueueSheet" | "practiceSheet"): void => {
+    void import("./queueSheets").then((m) => {
+      if (!current || !overlay.isConnected) return;
+      closeSheet();
+      err.textContent = "";
+      sheet = m[which]({
       state: current,
       act: (path, body) => void act(path, body),
       close: closeSheet,
@@ -452,9 +447,10 @@ export function openRoomsPanel(opts: RoomsPanelOptions = configured): void {
         shut();
         opts.onEnterPractice?.();
       },
+      });
+      card.append(sheet.node);
+      card.classList.add("sheeted");
     });
-    card.append(sheet.node);
-    card.classList.add("sheeted");
   };
 
   const onKey = (e: KeyboardEvent): void => {
@@ -534,7 +530,7 @@ export function openRoomsPanel(opts: RoomsPanelOptions = configured): void {
   // ---- Nothing yet: the three doors ---------------------------------------
   function homeView(state: Lobby): HTMLElement {
     const solo = door("⚡", "Solo Queue", "Quick match into a three-stack.");
-    solo.addEventListener("click", () => openSheet(soloQueueSheet));
+    solo.addEventListener("click", () => openSheet("soloQueueSheet"));
 
     const openCount = state.rooms.length;
     const team = door(
@@ -543,10 +539,10 @@ export function openRoomsPanel(opts: RoomsPanelOptions = configured): void {
       openCount > 0 ? `Make a room, or join one of ${openCount} open.` : "Make a room and invite your friends.",
       state.invites.length > 0 ? `${state.invites.length} invite${state.invites.length > 1 ? "s" : ""}` : undefined
     );
-    team.addEventListener("click", () => openSheet(teamQueueSheet));
+    team.addEventListener("click", () => openSheet("teamQueueSheet"));
 
     const prac = door("🎯", "Practice", "Fight with bots. No stakes, no record.");
-    prac.addEventListener("click", () => openSheet(practiceSheet));
+    prac.addEventListener("click", () => openSheet("practiceSheet"));
 
     return el("div", { class: "home" }, solo, team, prac);
   }

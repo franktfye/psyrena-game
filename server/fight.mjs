@@ -328,6 +328,7 @@ function hooksInto(events, members) {
     setBossPhase: (phase) => push({ e: "phase", phase }),
     bossStrike: (targets) => push({ e: "strike", targets }),
     bossFan: (fan) => push({ e: "fan", fan }),
+    bossOrbs: (volley) => push({ e: "orbs", volley }),
     damagePlayer: (n, who) => push({ e: "dmgPlayer", n, who }),
     healPlayer: (n, who) => push({ e: "healPlayer", n, who }),
     combatantDamaged: (name, amount, isPlayer, who) =>

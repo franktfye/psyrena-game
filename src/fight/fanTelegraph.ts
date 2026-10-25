@@ -33,7 +33,9 @@ import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { DynamicTexture } from "@babylonjs/core/Materials/Textures/dynamicTexture";
 import { Constants } from "@babylonjs/core/Engines/constants";
 import "@babylonjs/core/Meshes/Builders/planeBuilder";
-import type { BossFanView } from "@shared/fight/bossFight";
+import "@babylonjs/core/Meshes/Builders/discBuilder";
+import "@babylonjs/core/Meshes/Builders/sphereBuilder";
+import type { BossFanView, BossOrbsView } from "@shared/fight/bossFight";
 
 /** Hero body radius for the hit test, metres. */
 const BODY_R = 0.4;
@@ -59,9 +61,22 @@ interface Live {
 export interface FanTelegraphs {
   /** Start a telegraph aimed from `centre` at `aim`; `onLand` runs once, at the landing. */
   cast(view: BossFanView, centre: Vector3, aim: Vector3, onLand: (inside: (p: Vector3) => boolean) => void): void;
+  /**
+   * Corrupted psyche orbs (FightHooks.bossOrbs): each falls onto `at[i]` over
+   * `fallS` under its growing shadow; `onLand(i, inside)` runs as each lands.
+   */
+  castOrbs(view: BossOrbsView, at: Vector3[], onLand: (i: number, inside: (p: Vector3) => boolean) => void): void;
   tick(dt: number): void;
   dispose(): void;
 }
+
+/** Orb colours: Id hot red (drive), Ego amber (the broker), Superego pale blue (the judge). */
+const ORB_RGB: Record<BossOrbsView["orbs"][number]["name"], string> = {
+  Id: "255,64,64",
+  Ego: "255,184,72",
+  Superego: "150,212,255",
+};
+const ORB_DROP_H = 16;
 
 /** Unit-radius wedge in the XZ plane, opening along +Z; UVs planar over the full disc. */
 function wedge(name: string, scene: Scene, halfRad: number): Mesh {
@@ -215,6 +230,87 @@ export function createFanTelegraphs(scene: Scene): FanTelegraphs {
 
   const live: Live[] = [];
 
+  // ---- psyche orbs ------------------------------------------------------------
+  /** Shadow: near-black core, a rim in the orb's colour — "something is coming down here". */
+  const shadowMats = new Map<string, StandardMaterial>();
+  const shadowMat = (rgb: string): StandardMaterial => {
+    let m = shadowMats.get(rgb);
+    if (!m) {
+      const t = tex(`orbShadow_${rgb}`, (g, w) => {
+        const c = w / 2;
+        const f = g.createRadialGradient(c, c, 0, c, c, c);
+        f.addColorStop(0, "rgba(0,0,0,0.85)");
+        f.addColorStop(0.75, "rgba(8,0,12,0.6)");
+        f.addColorStop(0.9, `rgba(${rgb},0.55)`);
+        f.addColorStop(0.97, `rgba(${rgb},0.95)`);
+        f.addColorStop(1, `rgba(${rgb},0)`);
+        g.fillStyle = f;
+        g.fillRect(0, 0, w, w);
+      });
+      m = decal(`orbShadowMat_${rgb}`, t, false);
+      shadowMats.set(rgb, m);
+    }
+    return m;
+  };
+  const glowMat = (name: string, rgb: string, alpha: number, additive: boolean): StandardMaterial => {
+    const [r, g, b] = rgb.split(",").map((v) => Number(v) / 255) as [number, number, number];
+    const m = new StandardMaterial(name, scene);
+    m.disableLighting = true;
+    m.emissiveColor = additive ? new Color3(r, g, b) : new Color3(r * 0.25, g * 0.1, b * 0.3);
+    m.alpha = alpha;
+    if (additive) m.alphaMode = Constants.ALPHA_ADD;
+    return m;
+  };
+  const orbMats = new Map<string, { core: StandardMaterial; shell: StandardMaterial; flash: StandardMaterial; label: StandardMaterial }>();
+  const orbMat = (name: string, rgb: string) => {
+    let m = orbMats.get(name);
+    if (!m) {
+      const lt = tex(`orbLabel_${name}`, (g, w) => {
+        g.font = `bold ${Math.round(w * 0.16)}px Georgia, serif`;
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.shadowColor = `rgba(${rgb},1)`;
+        g.shadowBlur = w * 0.04;
+        g.fillStyle = "rgba(255,248,240,0.95)";
+        g.fillText(name.toUpperCase(), w / 2, w / 2);
+      });
+      const label = new StandardMaterial(`orbLabelMat_${name}`, scene);
+      label.disableLighting = true;
+      label.emissiveTexture = lt;
+      label.opacityTexture = lt;
+      label.backFaceCulling = false;
+      const ft = tex(`orbFlash_${name}`, (g, w) => {
+        const c = w / 2;
+        const f = g.createRadialGradient(c, c, 0, c, c, c);
+        f.addColorStop(0, "rgba(255,245,240,0.9)");
+        f.addColorStop(0.6, `rgba(${rgb},0.7)`);
+        f.addColorStop(1, `rgba(${rgb},0)`);
+        g.fillStyle = f;
+        g.fillRect(0, 0, w, w);
+      });
+      m = {
+        core: glowMat(`orbCore_${name}`, rgb, 1, false),
+        shell: glowMat(`orbShell_${name}`, rgb, 0.55, true),
+        flash: decal(`orbFlashMat_${name}`, ft, true),
+        label,
+      };
+      orbMats.set(name, m);
+    }
+    return m;
+  };
+  interface Orb {
+    root: TransformNode;
+    shadow: Mesh;
+    body: TransformNode;
+    flash: Mesh;
+    t: number;
+    fallS: number;
+    radiusM: number;
+    landed: boolean;
+    land: () => void;
+  }
+  const orbs: Orb[] = [];
+
   const drop = (f: Live): void => {
     f.root.dispose(false, false); // children go with it; materials are shared
   };
@@ -260,7 +356,81 @@ export function createFanTelegraphs(scene: Scene): FanTelegraphs {
       live.push({ view, root, bed, fill, rails, flash, yaw, t: 0, landed: false, onLand });
     },
 
+    castOrbs(view, at, onLand) {
+      view.orbs.forEach((o, i) => {
+        const p = at[i];
+        if (!p) return;
+        const rgb = ORB_RGB[o.name];
+        const mats = orbMat(o.name, rgb);
+        const root = new TransformNode(`orb_${o.id}`, scene);
+        root.position.set(p.x, FLOOR_Y, p.z);
+        const shadow = MeshBuilder.CreateDisc(`orbShadow_${o.id}`, { radius: 1, tessellation: 48 }, scene);
+        shadow.material = shadowMat(rgb);
+        shadow.rotation.x = Math.PI / 2;
+        shadow.isPickable = false;
+        shadow.parent = root;
+        shadow.scaling.setAll(view.radiusM * 0.35);
+        const body = new TransformNode(`orbBody_${o.id}`, scene);
+        body.parent = root;
+        body.position.y = ORB_DROP_H;
+        const core = MeshBuilder.CreateSphere(`orbCore_${o.id}`, { diameter: 1.3, segments: 12 }, scene);
+        core.material = mats.core;
+        core.isPickable = false;
+        core.parent = body;
+        const shell = MeshBuilder.CreateSphere(`orbShell_${o.id}`, { diameter: 1.9, segments: 12 }, scene);
+        shell.material = mats.shell;
+        shell.isPickable = false;
+        shell.parent = body;
+        const label = MeshBuilder.CreatePlane(`orbLabel_${o.id}`, { size: 2.6 }, scene);
+        label.material = mats.label;
+        label.billboardMode = Mesh.BILLBOARDMODE_ALL;
+        label.isPickable = false;
+        label.parent = body;
+        label.position.y = 1.5;
+        const flash = MeshBuilder.CreateDisc(`orbFlash_${o.id}`, { radius: 1, tessellation: 48 }, scene);
+        flash.material = mats.flash;
+        flash.rotation.x = Math.PI / 2;
+        flash.position.y = 0.02;
+        flash.isPickable = false;
+        flash.parent = root;
+        flash.scaling.setAll(view.radiusM);
+        flash.visibility = 0;
+        const cx = p.x;
+        const cz = p.z;
+        orbs.push({
+          root, shadow, body, flash, t: 0, fallS: view.fallS, radiusM: view.radiusM, landed: false,
+          land: () => onLand(i, (q) => Math.hypot(q.x - cx, q.z - cz) <= view.radiusM + BODY_R),
+        });
+      });
+    },
+
     tick(dt) {
+      for (let i = orbs.length - 1; i >= 0; i--) {
+        const o = orbs[i]!;
+        o.t += dt;
+        if (!o.landed) {
+          const k = Math.min(1, o.t / o.fallS);
+          // Slow, then fast: it hangs up there, and the last second is a plunge.
+          o.body.position.y = ORB_DROP_H * (1 - k * k * k);
+          o.body.rotation.y += dt * 1.6;
+          o.shadow.scaling.setAll(o.radiusM * (0.35 + 0.65 * k));
+          o.shadow.visibility = 0.45 + 0.55 * k;
+          if (o.t >= o.fallS) {
+            o.landed = true;
+            o.body.dispose(false, false);
+            o.land();
+          }
+          continue;
+        }
+        const k = (o.t - o.fallS) / FLASH_S;
+        o.flash.visibility = k < 0.15 ? k / 0.15 : Math.max(0, 1 - (k - 0.15) / 0.85);
+        o.flash.scaling.setAll(o.radiusM * (1 + k * 0.25));
+        o.shadow.visibility = Math.max(0, 1 - k);
+        if (k >= 1) {
+          o.root.dispose(false, false);
+          orbs.splice(i, 1);
+        }
+      }
       for (let i = live.length - 1; i >= 0; i--) {
         const f = live[i]!;
         f.t += dt;
@@ -311,6 +481,8 @@ export function createFanTelegraphs(scene: Scene): FanTelegraphs {
     dispose() {
       for (const f of live) drop(f);
       live.length = 0;
+      for (const o of orbs) o.root.dispose(false, false);
+      orbs.length = 0;
     },
   };
 }
