@@ -150,6 +150,8 @@ const CSS = `
 #auth button.cta:hover:not(:disabled) { filter: brightness(1.25); }
 #auth button.cta:disabled { opacity: .35; cursor: default; }
 #auth .err { color: #ff8896; font-size: 12px; min-height: 18px; text-align: center; }
+#auth .notice { font-size: 12px; line-height: 1.4; text-align: center; color: #bfe8c4; background: #0f2a17cc;
+  border: 1px solid #3f7a4c; padding: 7px 10px; }
 #auth .load { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px;
   font-size: 11px; letter-spacing: .04em; color: #b9b2a2; opacity: .9; cursor: default; }
 #auth .load .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b6b6b; box-shadow: 0 0 6px currentColor; }
@@ -567,7 +569,11 @@ function loginScreen(root: HTMLElement): Promise<Profile> {
     student.style.display = "none";
     const btn = el("button", { class: "cta", type: "submit" }, "Log In");
     const swap = el("button", { class: "swap", type: "button" }, "New here? Create an account");
-    const form = el("form", {}, user, pass, invite, student, btn, swap, err);
+    // Open-registration notice: shown in register mode while the admin console's
+    // "Allow free registration" switch is on (GET /api/register/policy).
+    const notice = el("div", { class: "notice" }, "Registration is open — no invitation code needed. Leave the code box empty.");
+    notice.style.display = "none";
+    const form = el("form", {}, notice, user, pass, invite, student, btn, swap, err);
 
     const syncStudent = (): void => {
       const needed = mode === "register" && invite.value.trim() !== "";
@@ -587,12 +593,16 @@ function loginScreen(root: HTMLElement): Promise<Profile> {
       pass.setAttribute("autocomplete", mode === "login" ? "current-password" : "new-password");
       pass.setAttribute("placeholder", mode === "login" ? "password" : "password (8+ characters)");
       invite.style.display = mode === "register" ? "" : "none";
+      notice.style.display = "none";
       syncStudent();
       if (mode === "register") {
         // Admins can open registration in the console — reflect that in the
         // code box's label so nobody hunts for a code they don't need.
         void api<{ inviteRequired: boolean }>("/api/register/policy")
-          .then((p) => { invite.placeholder = p.inviteRequired ? "invitation code" : "invitation code (optional)"; })
+          .then((p) => {
+            invite.placeholder = p.inviteRequired ? "invitation code" : "invitation code (optional)";
+            notice.style.display = !p.inviteRequired && mode === "register" ? "" : "none";
+          })
           .catch(() => { /* label stays conservative */ });
       }
     };
