@@ -162,6 +162,12 @@ export interface NightmareBoss {
    * (P1 hate-target hit), true = raid-wide AOE (P4 terror blast).
    */
   strike(all: boolean): void;
+  /**
+   * A ground fan (FightHooks.bossFan): `aim` = square onto that floor point
+   * for the windup; null = it lands now — swing (or, wide, the two-hand blast)
+   * and let go of the aim when the clip ends.
+   */
+  sweep(aim: Vector3 | null, wide?: boolean): void;
   dispose(): void;
 }
 
@@ -1468,6 +1474,7 @@ export async function buildNightmare(
     setP2Stage: () => {},
     setCombatAnchors: () => {},
     strike: () => {},
+    sweep: () => {},
     dispose: disposeAll,
   };
 
@@ -1505,6 +1512,8 @@ export async function buildNightmare(
   let anchors: { aim(): Vector3 | null; heroes(): Vector3[] } | null = null;
   // True while a P1 swing runs — the window where the boss squares onto its victim.
   let attackFacing = false;
+  // A fan's aim point, held from its telegraph to the end of its swing.
+  let sweepAt: Vector3 | null = null;
 
   const enter = (p: NightmarePhase): void => {
     if (phase === "dead" && p !== "dead") return; // terminal
@@ -1514,6 +1523,7 @@ export async function buildNightmare(
     pulse.setEnabled(p === "p4");
     pulseT = -1;
     attackFacing = false;
+    sweepAt = null;
     lightning.clear();
     // Heal motes belong to the P3 bubble only.
     if (p === "p3") healMotes.start();
@@ -1628,6 +1638,23 @@ export async function buildNightmare(
 
   boss.strike = strikeVisual;
 
+  boss.sweep = (aim, wide = false) => {
+    if (phase === "dead" || phase === "idle") return;
+    if (aim) {
+      sweepAt = aim.clone();
+      return;
+    }
+    const clip = wide ? clips.blast : clips.attacks[attackIx++ % Math.max(1, clips.attacks.length)];
+    if (!clip) {
+      sweepAt = null;
+      return;
+    }
+    // Back to whatever this phase loops on (P3's Fortress floats in Swim_Idle).
+    sequenceThen([clip], phase === "p3" ? clips.swimIdle : clips.idleLoop, () => {
+      sweepAt = null;
+    });
+  };
+
   boss.setCombatAnchors = (a) => {
     anchors = a;
   };
@@ -1671,7 +1698,7 @@ export async function buildNightmare(
     // takes its eyes off whoever holds it), and during P1 swings (the boss
     // faces WHO it hits, exactly while hitting them).
     const aimAt =
-      phase === "p4" || (phase === "p1" && attackFacing) ? (anchors?.aim() ?? null) : null;
+      sweepAt ?? (phase === "p4" || (phase === "p1" && attackFacing) ? (anchors?.aim() ?? null) : null);
     if (aimAt) {
       const targetYaw = Math.atan2(aimAt.x, aimAt.z) + BOSS_MODEL_YAW;
       let d = targetYaw - fightYaw.rotation.y;

@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # Generate the Nightmare boss VO pack — all 27 lines — with VoxCPM2.
 #
+# 2026-10-25: the 17 main lines were re-voiced as a BOSS. The old main voice
+# ("gender-neutral spectral, feminine-leaning", 192 Hz) read eerie, not
+# commanding. The new one, `nightmare_boss`, is designed on the vLLM-Omni
+# server (:8647, same API as the hero packs): "an ancient, colossal nightmare
+# lord … very deep, booming bass … gravel … total contempt and dark
+# amusement". 8 rolls (seeds 9101–9108) graded by tools/voice-rank.py; kept
+# 9104: 81.5 Hz, the most gravel (jitter 2.0%), and the least like any hero
+# (WavLM ≤ 0.88). Each line is cloned from it with its own delivery, then the
+# BOSS_FX chain below. The 10 P2 memory reveals keep their five doll voices.
+#
 # Replaces the retired Qwen3-TTS recipe (gen-nightmare-memory-voice.sh, which
 # only ever covered the 10 P2 memory lines; the other 17 had no script at all).
 #
@@ -72,6 +82,18 @@ seed_for() {
   python3 -c 'import zlib,sys; print(7000 + zlib.crc32(sys.argv[1].encode()) % 10000)' "$1"
 }
 
+# The boss: pitched down 10% and slowed 6% (rubberband keeps the formants
+# clean), a sub-octave double underneath, compression, then early reflections
+# and a ~0.9 s hall. A filter graph, so it goes through -filter_complex.
+BOSS_FX="[0:a]aresample=48000,silenceremove=start_periods=1:start_threshold=-40dB:start_silence=0.06,\
+rubberband=pitch=0.9:tempo=0.94,asplit=2[m][s];\
+[s]rubberband=pitch=0.5,lowpass=f=700,volume=0.32[sub];[m]highpass=f=60[mm];\
+[mm][sub]amix=inputs=2:normalize=0,acompressor=threshold=-18dB:ratio=3:attack=10:release=200,\
+aecho=0.8:0.85:23|41|67:0.5|0.4|0.3,\
+aecho=0.85:0.7:90|160|260|380|520|700|900:0.42|0.34|0.27|0.21|0.16|0.12|0.09,\
+loudnorm=I=-18:TP=-2:LRA=11,aresample=48000"
+BOSS_API="${VOXCPM_API:-http://localhost:8647/v1/audio/speech}"
+
 VOID_FX="aresample=24000,asetrate=24000*0.9,aresample=24000,\
 aecho=0.8:0.9:7|11|13|17:0.9|0.85|0.8|0.75,\
 aecho=0.85:0.8:60|110|170|240|320|410|520:0.45|0.36|0.29|0.23|0.18|0.14|0.11"
@@ -94,37 +116,55 @@ gen() { # stem voice text control fx
     -codec:a libopus -b:a 24k -ac 1 -application voip "$OUT/$stem.webm"
 }
 
-# The void voice carries all 17 main lines; the manifest stores one shared
-# instruct for them, so the control string is constant.
-VOID="Dark, mocking, gleeful cruelty; hollow void resonance."
-void() { gen "$1" nightmare "$2" "$VOID" "$VOID_FX"; }
+# The boss voice carries all 17 main lines: cloned from _ref/nightmare_boss.wav
+# with "(style, delivery)text", raw takes under _raw_tts/boss/.
+BOSS_STYLE="Ancient colossal nightmare lord, very deep booming bass with gravel, commanding and contemptuous"
+void() { # stem text delivery [seed — pins a re-roll; default seed_for stem]
+  local stem="$1" text="$2" delivery="$3" seed="${4:-}" raw="$RAW/boss/$1.wav"
+  [ -n "$seed" ] || seed="$(seed_for "$stem")"
+  mkdir -p "$RAW/boss"
+  if [ -s "$raw" ]; then echo "skip $stem"; else
+    echo "== $stem (boss) =="
+    python3 - "$BOSS_STYLE, $delivery" "$text" "$seed" "$REF/nightmare_boss.wav" <<'PY' \
+      | curl -sf -m 600 -X POST "$BOSS_API" -H 'Content-Type: application/json' -d @- --output "$raw"
+import base64, json, sys
+style, text, seed, ref = sys.argv[1:5]
+print(json.dumps({"model": "openbmb/VoxCPM2", "input": f"({style}){text}", "voice": "default",
+                  "response_format": "wav", "seed": int(seed),
+                  "ref_audio": "data:audio/wav;base64," + base64.b64encode(open(ref, "rb").read()).decode()}))
+PY
+  fi
+  ffmpeg -y -loglevel error -i "$raw" -filter_complex "$BOSS_FX" \
+    -codec:a libopus -b:a 32k -ac 1 "$OUT/$stem.webm"
+}
 # Each P2 stage has its own designed voice and its own per-line direction.
 mem() { gen "$1" "$2" "$3" "$4" "$MEMORY_FX"; }
 
 # ---- Bookends --------------------------------------------------------------
-void start_activate "Ahh… you opened the door. Good. I was starving."
-void end_defeated   "So this is waking… how rude. Sleep well without me."
+void start_activate "Ahh… you opened the door. Good. I was starving." "slow and savouring, a low amused growl that turns hungry"
+void end_defeated   "So this is waking… how rude. Sleep well without me." "fading and bitter, a last contemptuous chuckle"
 
 # ---- Phase entries ---------------------------------------------------------
-void phase_p1_onslaught  "One by one. Desire does not wait its turn."
-void phase_p2_shapeshift "Watch me grow. Every age wants something different."
-void phase_p3_fortress   "I refuse. Denial wears better armor than steel."
-void phase_p4_terror     "Feel it. The pulse of every buried want."
+void phase_p1_onslaught  "One by one. Desire does not wait its turn." "relentless and commanding, rising menace"
+void phase_p2_shapeshift "Watch me grow. Every age wants something different." "grand and theatrical, slow and swelling"
+void phase_p3_fortress   "I refuse. Denial wears better armor than steel." "cold, absolute and defiant"
+void phase_p4_terror     "Feel it. The pulse of every buried want." "booming and terrifying, building to a roar"
 
 # ---- P2 age stages (doll lines) --------------------------------------------
-void stage_infant_oral     "Feed me. The void has a mouth."
-void stage_toddler_anal    "Mine. Not yours. Mine."
-void stage_child_phallic   "Look at me! I dare you to look away."
-void stage_teen_latency    "Quiet now… I'm studying how you break."
-void stage_adult_genital   "Whole at last. Now pay me what desire is owed."
+void stage_infant_oral     "Feed me. The void has a mouth." "ravenous, a deep hungry rumble"
+void stage_toddler_anal    "Mine. Not yours. Mine." "possessive, each word a hammer blow"
+void stage_child_phallic   "Look at me! I dare you to look away." "booming, a vain thundering dare"
+void stage_teen_latency    "Quiet now… I'm studying how you break." "low and quiet, a menacing near-whisper"
+# Seed pinned: the stem seed said "Oh, at last"; 503 says "Whole" (Whisper hears the homophone "Hole").
+void stage_adult_genital   "Whole at last. Now pay me what desire is owed." "triumphant and regal, a slow verdict" 503
 
 # ---- Defense-mechanism barks (P3) ------------------------------------------
-void defense_repression   "What hit? I felt nothing. Nothing at all."
-void defense_denial       "That didn't happen. Your eyes are lying."
-void defense_projection   "You're the monster here. I merely reflect."
-void defense_displacement "Not you. Them. Anger needs a smaller target."
-void defense_sublimation  "I turned my hunger into art. Admire the blast."
-void defense_regression   "Fine! Back to the crib. The void was happier small."
+void defense_repression   "What hit? I felt nothing. Nothing at all." "dismissive and bored"
+void defense_denial       "That didn't happen. Your eyes are lying." "flat, utterly certain contempt"
+void defense_projection   "You're the monster here. I merely reflect." "mocking, a dark smile in the voice"
+void defense_displacement "Not you. Them. Anger needs a smaller target." "cruel and amused"
+void defense_sublimation  "I turned my hunger into art. Admire the blast." "proud and grandiose"
+void defense_regression   "Fine! Back to the crib. The void was happier small." "a furious roar that sinks into a sulking growl"
 
 # ---- P2 worst-memory reveals — one designed voice per age stage -------------
 LAUGH="Hahahaha! Let me show you your worst memory."

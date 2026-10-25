@@ -40,6 +40,31 @@ export interface FightPhase {
   outgoing: FightOutgoing | null;
   /** P2 Shapeshift palette-answer check. */
   skillCheck?: { stages: number; stageDurS: number };
+  /** Ground fan the boss sweeps at a hero: the one attack you dodge by moving. */
+  fan?: FightFan;
+}
+
+/**
+ * A fan-shaped ground AOE, centred on the boss and aimed at one hero. The sim
+ * has no positions, so it owns only the clock and the damage: it names the
+ * target and the shape, the clients draw the wedge for `windupS`, and each
+ * client reports whether ITS hero stood inside when it landed
+ * (BossFight.fanHitAs). Damage scales like `outgoing` (difficulty, dome,
+ * enrage — not team size) and goes through mitigation.
+ */
+export interface FightFan {
+  /** Floor label and HUD name ("Dread Sweep"). */
+  name: string;
+  /** Phase seconds before the first sweep, then every `periodS`. */
+  firstAtS: number;
+  periodS: number;
+  /** Half the wedge's opening, degrees (45 = a 90° fan). */
+  halfAngleDeg: number;
+  /** Reach from the boss's centre, metres (the arena floor is 18 m). */
+  radiusM: number;
+  /** Telegraph length: the time a hero has to get out. */
+  windupS: number;
+  hitDamage: number;
 }
 
 export interface P2Debuff {
@@ -109,6 +134,8 @@ export const NIGHTMARE_STANDARD: BossFightScript = {
       dmgTakenMult: 1.0,
       regenPctPerS: 0,
       outgoing: { hitDamage: 100, periodS: 2, targets: "threat" },
+      // A 90° wedge at one hero: a sidestep of ~6 m clears it from mid-range.
+      fan: { name: "Dread Sweep", firstAtS: 10, periodS: 15, halfAngleDeg: 45, radiusM: 14, windupS: 2, hitDamage: 300 },
     },
     {
       id: "p2",
@@ -126,6 +153,7 @@ export const NIGHTMARE_STANDARD: BossFightScript = {
       dmgTakenMult: 0.1, // armor blocks 90%; the P2 debuff bypasses it
       regenPctPerS: 0.01,
       outgoing: null,
+      fan: { name: "Dread Sweep", firstAtS: 8, periodS: 15, halfAngleDeg: 45, radiusM: 14, windupS: 2, hitDamage: 300 },
     },
     {
       id: "p4",
@@ -134,6 +162,9 @@ export const NIGHTMARE_STANDARD: BossFightScript = {
       dmgTakenMult: 1.0,
       regenPctPerS: 0,
       outgoing: { hitDamage: 50, periodS: 5, targets: "all" },
+      // The last stage: 160°, wall to wall. Still a 200° gap behind the boss —
+      // run round it, or hug its flank where the arc is short.
+      fan: { name: "Night Terror", firstAtS: 6, periodS: 12, halfAngleDeg: 80, radiusM: 18, windupS: 2, hitDamage: 400 },
     },
   ],
   p2Debuff: {

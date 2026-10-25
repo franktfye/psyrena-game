@@ -27,6 +27,7 @@
  */
 
 import type {
+  BossFanView,
   BossFight,
   ConditioningHudState,
   FightEndStats,
@@ -102,6 +103,8 @@ export interface FightDriver {
   readonly modeling: ModelingHudState | null;
   /** Bandura: move the model pin on (automatic → each teammate → automatic). */
   cycleModel(): void;
+  /** My hero stood inside fan `id` when it landed (FightHooks.bossFan). */
+  fanHit(id: number): void;
   /**
    * The boss model reporting the P2 form it is showing. Local only: the sim
    * has no stage clock of its own and learns the answer this way. In remote
@@ -243,6 +246,10 @@ export class LocalFightDriver implements FightDriver {
     this.fight.cycleModelAs(this.actorId);
   }
 
+  fanHit(id: number): void {
+    this.fight.fanHitAs(this.actorId, id);
+  }
+
   notifyP2Stage(stage: number): void {
     this.fight.notifyP2Stage(stage);
   }
@@ -281,6 +288,7 @@ type WireEvent =
   | { e: "announce"; text: string }
   | { e: "phase"; phase: FightPhaseState }
   | { e: "strike"; targets: "threat" | "all" }
+  | { e: "fan"; fan: BossFanView }
   | { e: "dmgPlayer"; n: number; who?: string }
   | { e: "healPlayer"; n: number; who?: string }
   | { e: "hurt"; name: string; amount: number; isPlayer: boolean; who?: string }
@@ -531,6 +539,9 @@ export class RemoteFightDriver implements FightDriver {
         case "strike":
           h.bossStrike(ev.targets);
           break;
+        case "fan":
+          h.bossFan?.({ ...ev.fan, targetIsPlayer: mine(ev.fan.targetId) });
+          break;
         case "dmgPlayer":
           if (mine(ev.who)) h.damagePlayer(ev.n);
           break;
@@ -678,6 +689,13 @@ export class RemoteFightDriver implements FightDriver {
     if (this.fallback) return this.fallback.cycleModel();
     void post("/api/fight/sim/intent", { kind: "model" }).catch((err) =>
       console.warn("[fight] model intent failed:", err)
+    );
+  }
+
+  fanHit(id: number): void {
+    if (this.fallback) return this.fallback.fanHit(id);
+    void post("/api/fight/sim/intent", { kind: "fan", fan: id }).catch((err) =>
+      console.warn("[fight] fan report failed:", err)
     );
   }
 

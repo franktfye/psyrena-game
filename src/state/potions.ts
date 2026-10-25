@@ -36,6 +36,11 @@ export function potionHealingMult(): number {
   return multiplierFor("healing");
 }
 
+/** Focus-regen potion term (Cold Brew): the client's regen multiplier takes it at fight start. */
+export function potionFocusRegenMult(): number {
+  return multiplierFor("focus");
+}
+
 /**
  * Adopt a fresh server snapshot: cache it and re-issue the HUD buff tiles.
  * The player store expires tiles by its own clock, so each tile is pushed
@@ -49,13 +54,16 @@ export function setActivePotions(list: ActivePotion[]): void {
   }
   active = list.filter((p) => p.expiresAt > now);
   for (const p of active) {
+    const pct = Math.round(p.magnitude * 100);
     player.applyBuff({
       id: `potion_${p.effect}`,
-      name: `${p.name} — +${Math.round(p.magnitude * 100)}% ${p.effect}`,
+      name: `${p.name} — +${pct}% ${p.effect === "focus" ? "Focus regen" : p.effect}`,
       icon: p.icon,
       kind: "buff",
       durationMs: p.expiresAt - now,
-      desc: `Coffee Shop potion: all ${p.effect} you ${p.effect === "healing" ? "deliver" : "deal"} is increased ${Math.round(p.magnitude * 100)}% until it wears off. Buy another cup to refresh the day.`,
+      desc: p.effect === "focus"
+        ? `Coffee Shop potion: your Focus refills ${pct}% faster in fights until it wears off. Buy another cup to refresh the day.`
+        : `Coffee Shop potion: all ${p.effect} you ${p.effect === "healing" ? "deliver" : "deal"} is increased ${pct}% until it wears off. Buy another cup to refresh the day.`,
     });
   }
 }

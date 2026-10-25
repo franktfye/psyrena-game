@@ -76,7 +76,6 @@ import { createCastProjectiles, type CastProjectiles } from "../vfx/projectiles"
 import { buildBlackHolePortal } from "../vfx/blackHolePortal";
 import { openRoomsPanel, closeRoomsPanel, configureRoomsPanel } from "../ui/roomsPanel";
 import { setPracticeMode } from "../fight/practice";
-import { buildSurvivalGate } from "./survivalPortal";
 import { enterRankedArena } from "../fight/arenaEntry";
 import { STAGE_DETAIL } from "../ui/heroLore";
 import { overTimeText, reachText } from "../ui/skillText";
@@ -97,7 +96,6 @@ import { syncLoadout } from "../state/loadout";
 import { wardrobe } from "../state/wardrobe";
 import type { Profile } from "../ui/authFlow";
 import { VillageClient, type VillagePlayer } from "../net/village";
-import { showPlayerCard } from "../ui/playerCard";
 import {
   PET_PARK_ROSTER, createPetSlot, createPetFollower, petForHero, type PetHandle,
 } from "./petFollower";
@@ -732,7 +730,8 @@ export async function createVillageHub(engine: AbstractEngine, profile?: Profile
   tickers.push(portal);
   // The Dream Siege pailou on the plaza edge (survival mode). Also before the
   // collider sweep, so its pillars are solid.
-  const survivalGate = await buildSurvivalGate(scene);
+  // Lazy: the Dream Siege gate is survival code, not boot (CLAUDE.md rule 3).
+  const survivalGate = await (await import("./survivalPortal")).buildSurvivalGate(scene);
 
   tickers.push(...(await buildCrowd(scene, mats)));
   tickers.push(...(await buildShopNpcs(scene, kit)));
@@ -869,7 +868,8 @@ export async function createVillageHub(engine: AbstractEngine, profile?: Profile
         );
         const who = (playerHit?.pickedMesh?.metadata as { remotePlayer?: string } | null)
           ?.remotePlayer;
-        if (playerHit?.hit && who) showPlayerCard(who);
+        // Lazy: the card is only needed on a tap (CLAUDE.md rule 3).
+        if (playerHit?.hit && who) void import("../ui/playerCard").then((m) => m.showPlayerCard(who));
       }
     }
   });

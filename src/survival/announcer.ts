@@ -11,18 +11,24 @@
  *     run, so they wait up to 20 s — long enough to outlast a run intro;
  *   - a 0.6 s gap between lines, so they read as separate thoughts.
  * Every line is subtitled (voiceLines.ts, generated from lines.tsv): the text
- * fades in as the line starts and out when it ends or is cut.
+ * fades in as the line starts and out when it ends or is cut. Nothing plays
+ * while the loading screen is up (the run ticks during shader compilation, so
+ * the intro used to be spoken — and subtitled — under it), and a line whose
+ * audio cannot play (autoplay refused, file missing) still stays up for its
+ * reading time.
  */
 import { audioUrl } from "../core/audio";
 import { VOICE_LINES } from "./voiceLines";
 
+// Small but clear: upright text on a near-solid plate, a hard 1 px shadow, no italics.
 const SUB_CSS = `
 #sv-sub { position: fixed; left: 50%; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 136px); transform: translateX(-50%);
-  max-width: min(70vw, 680px); z-index: 32; pointer-events: none; text-align: center; padding: 6px 14px; border-radius: 8px;
-  background: rgba(8, 6, 16, .45); color: rgba(246, 240, 255, .95); font: italic clamp(13px, 2.8vh, 18px) Georgia, serif;
-  text-shadow: 0 1px 3px #000; opacity: 0; transition: opacity .25s ease; }
+  max-width: min(64vw, 560px); z-index: 33; pointer-events: none; text-align: center; padding: 5px 12px; border-radius: 6px;
+  background: rgba(6, 4, 14, .78); border: 1px solid rgba(190, 160, 255, .22); color: #f6f0ff;
+  font: 500 clamp(12px, 2.4vh, 15px)/1.35 system-ui, sans-serif; letter-spacing: .01em;
+  text-shadow: 0 1px 1px #000; opacity: 0; transition: opacity .2s ease; }
 #sv-sub.on { opacity: 1; }
-#sv-sub b { display: block; font: 700 clamp(9px, 1.6vh, 11px) system-ui; letter-spacing: .18em; color: rgba(190, 160, 255, .85); font-style: normal; margin-bottom: 2px; }
+#sv-sub b { display: block; font: 700 clamp(8px, 1.4vh, 10px) system-ui; letter-spacing: .22em; color: rgba(190, 160, 255, .9); margin-bottom: 1px; }
 `;
 
 const BASE = "/assets/survival/voice";
@@ -65,12 +71,16 @@ export function createAnnouncer(): Announcer {
   let timer = 0;
 
   const staleAfter = (p: number) => (p >= 2 ? 20000 : 3000);
+  /** The loading screen lifts when main.ts publishes the scene; until then, hold every line. */
+  const onScreen = () => typeof document === "undefined" || document.body.dataset.scene === "kowloon";
 
   function pump(): void {
     if (playing || typeof Audio === "undefined") return;
     const now = performance.now();
-    if (now < quietUntil) {
-      timer = window.setTimeout(pump, quietUntil - now);
+    // Lines do not age behind the loading screen: a phone's shader compile can outlast 20 s.
+    if (!onScreen()) for (const q of queue) q.at = now;
+    if (now < quietUntil || !onScreen()) {
+      timer = window.setTimeout(pump, Math.max(200, quietUntil - now));
       return;
     }
     for (let i = queue.length - 1; i >= 0; i--) if (now - queue[i].at > staleAfter(queue[i].priority)) queue.splice(i, 1);
@@ -89,9 +99,11 @@ export function createAnnouncer(): Announcer {
       quietUntil = performance.now() + GAP_MS;
       pump();
     };
+    // No sound (autoplay refused, file missing): the subtitle still gets its reading time.
+    const silent = () => window.setTimeout(done, Math.max(2500, (VOICE_LINES[next.key]?.length ?? 0) * 65));
     el.addEventListener("ended", done);
-    el.addEventListener("error", done);
-    void el.play().catch(done);
+    el.addEventListener("error", silent);
+    void el.play().catch(silent);
   }
 
   return {

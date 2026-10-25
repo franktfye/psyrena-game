@@ -759,8 +759,10 @@ function heroPicker(root: HTMLElement, profile: Profile): Promise<Profile> {
     };
 
     const grid = el("div", { class: "grid" });
-    for (const h of ROSTER) {
-      const locked = !profile.unlockedHeroes.includes(h.id);
+    // Unlocked heroes first, then the locked ones; roster order within each (sort is stable).
+    const isLocked = (id: string): boolean => !profile.unlockedHeroes.includes(id);
+    for (const h of [...ROSTER].sort((a, b) => Number(isLocked(a.id)) - Number(isLocked(b.id)))) {
+      const locked = isLocked(h.id);
       const rl = el("div", { class: "rl" }, h.role);
       rl.style.color = ROLE_COLOR[h.role] ?? "#f4e3b2";
       const tile = el("div", {

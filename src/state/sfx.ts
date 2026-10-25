@@ -106,6 +106,10 @@ const SFX = {
   "boss.skillcheck.wrong": { files: ["toll-the-dead-001"], gain: 0.7 },
   "boss.armor.up": { files: ["shield-spell-v1-intro-03"] },
   "boss.terror.aoe": { files: ["chain-lightning-secondary-strike-5ft-00"], gain: 0.6 },
+  // The ground fan: a rising hum while the wedge fills, then the sweep itself.
+  "boss.fan.windup": { files: ["moonbeam-intro-v1-003"], gain: 0.5 },
+  "boss.fan.land": { files: ["meleeattack-swoosh-heavy-group01-00"], gain: 0.75 },
+  "boss.fan.land.wide": { files: ["thunderclap-001"], gain: 0.7 },
   "fight.phase.warning": { files: ["detect-magic-001"], gain: 0.7 },
   "fight.victory": { files: ["bless-v1-005"] },
   "fight.defeat": { files: ["toll-the-dead-001"] },

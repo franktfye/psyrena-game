@@ -38,7 +38,7 @@ import {
   resolveUltimate,
   type MatchFormat,
 } from "../combat.ts";
-import type { BossFightScript, FightPhaseId, SimAllySpec } from "../bosses/nightmare.ts";
+import type { BossFightScript, FightFan, FightPhaseId, SimAllySpec } from "../bosses/nightmare.ts";
 import type { Effect, Hero, OverTime } from "../types.ts";
 import {
   castAddon,
@@ -71,6 +71,13 @@ export interface FightHooks {
    * ("threat" = single-target swing at the hate target, "all" = raid AOE).
    */
   bossStrike(targets: "threat" | "all"): void;
+  /**
+   * The boss starts a ground fan (FightFan) at one hero. The client draws the
+   * wedge from the boss toward that hero for `windupS`, lands it, and — if
+   * its own hero is inside — reports so (driver.fanHit). `targetIsPlayer`
+   * follows `isPlayer`'s rule: "this client's hero" once a driver replays it.
+   */
+  bossFan?(fan: BossFanView): void;
   /** Damage the player (writes the player store → HUD HP bar). */
   damagePlayer(amount: number, actorId?: string): void;
   healPlayer(amount: number, actorId?: string): void;
@@ -188,6 +195,24 @@ export interface FightHooks {
    */
   fightEnd?(stats: FightEndStats): void;
 }
+
+/** One fan telegraph, as `FightHooks.bossFan` hands it to the scene. */
+export interface BossFanView {
+  id: number;
+  name: string;
+  /** Who it is aimed at: actor name (the scene's teammate lookup key) and id. */
+  targetName: string;
+  targetId: string;
+  targetIsPlayer: boolean;
+  halfAngleDeg: number;
+  radiusM: number;
+  windupS: number;
+  /** True for the last phase's widened sweep — the scene dresses it hotter. */
+  wide: boolean;
+}
+
+/** Seconds after a fan lands that a hit report still counts (network hop + a slow frame). */
+const FAN_REPORT_GRACE_S = 1.5;
 
 /** The sim-visible beats `FightHooks.sfxEvent` names. */
 export type SfxName =
@@ -720,6 +745,10 @@ export class BossFight {
   private enraged = false;
   private warned = false; // 5 s phase-change warning fired for this phase
   private nextOutgoingAt = 0;
+  private nextFanAt = 0;
+  private fanSeq = 0;
+  /** Live fans: landing time, scaled base damage, and who already took it. */
+  private fans = new Map<number, { landsAt: number; hitDamage: number; hit: Set<string> }>();
 
   /**
    * Everyone in the fight, primary first. `actors[0]` is what every legacy
@@ -2608,6 +2637,12 @@ export class BossFight {
       this.nextOutgoingAt += phase.outgoing.periodS;
       this.bossStrike(phase.outgoing.hitDamage, phase.outgoing.targets);
     }
+    // Ground fan: only if it can land before the phase turns over.
+    if (phase.fan && this.phaseT >= this.nextFanAt) {
+      this.nextFanAt += phase.fan.periodS;
+      if (this.phaseT + phase.fan.windupS < phase.durationS) this.castFan(phase.fan, phase.id === "p4");
+    }
+    for (const [id, f] of this.fans) if (this.simT > f.landsAt + FAN_REPORT_GRACE_S) this.fans.delete(id);
 
     // ---- operant engine (Skinner) ------------------------------------------
     // One pass per engine OWNER: each Skinner watches the whole team with
@@ -2796,6 +2831,7 @@ export class BossFight {
     this.warned = false;
     const phase = this.currentPhase();
     this.nextOutgoingAt = phase?.outgoing ? phase.outgoing.periodS : 0;
+    this.nextFanAt = phase?.fan ? phase.fan.firstAtS : 0;
     if (next === "p2") this.p2Stage = -1; // first doll swap reports stage 0
     if (next !== "p2") this.p2Stage = -1;
     this.hooks.setBossPhase(next);
@@ -2919,6 +2955,42 @@ export class BossFight {
       if (!best || c.threat > best.threat) best = c;
     }
     return best;
+  }
+
+  /**
+   * Start a fan at one hero. Aimed at a real player when there is one (a
+   * scripted ally has no feet to move), else at any hero standing.
+   */
+  private castFan(fan: FightFan, wide: boolean): void {
+    const live = this.actors.filter((c) => c.alive);
+    const pool = live.some((c) => c.input) ? live.filter((c) => c.input) : live;
+    const target = pool[Math.floor(Math.random() * pool.length)];
+    if (!target) return;
+    const id = ++this.fanSeq;
+    this.fans.set(id, { landsAt: this.simT + fan.windupS, hitDamage: fan.hitDamage, hit: new Set() });
+    this.hooks.bossFan?.({
+      id, name: fan.name, targetName: target.name, targetId: target.id, targetIsPlayer: target === this.primary,
+      halfAngleDeg: fan.halfAngleDeg, radiusM: fan.radiusM, windupS: fan.windupS, wide,
+    });
+  }
+
+  /**
+   * A client says its hero stood in fan `fanId` when it landed. Counted once
+   * per hero per fan, and only from the landing to FAN_REPORT_GRACE_S after
+   * (a little early slack for clock skew). Scaled like a boss strike, then
+   * mitigated like one — except team size: `sizeMult` softens strikes because
+   * a small party lacks a tank and a healer, and a dodge needs neither.
+   * Returns whether it hit.
+   */
+  fanHitAs(actorId: string, fanId: number): boolean {
+    const f = this.fans.get(fanId);
+    const c = this.actorBy(actorId);
+    if (!f || !c || !c.alive || !this.inCombat || f.hit.has(actorId)) return false;
+    if (this.simT < f.landsAt - 0.3) return false;
+    f.hit.add(actorId);
+    const dome = this.simT < this.domeUntil ? 1 - this.domeCut : 1;
+    this.hitCombatant(c, f.hitDamage * this.dmgMult * dome * (this.enraged ? ENRAGE_OUTGOING_MULT : 1));
+    return true;
   }
 
   private bossStrike(hitDamage: number, targets: "threat" | "all"): void {

@@ -33,6 +33,7 @@ import { setupSkillBar, buildFreud, type HeroHandle, type HeroVoice, type SkillB
 import { heroById } from "@shared/heroes";
 import { petSpec } from "@shared/progression";
 import { fightLoadout } from "../state/loadout";
+import { potionFocusRegenMult } from "../state/potions";
 import { petForHero } from "../scenes/petFollower";
 import type { BoonId } from "@shared/survival/content";
 import { createSurvivalView } from "./view";
@@ -98,7 +99,7 @@ export async function startSurvivalRun(opts: {
   // HP sizes the survival hero, Focus regen goes to the player store.
   const petId = petForHero(kit.id);
   const loadout = fightLoadout(kit.id, petId);
-  player.manaRegenMult = loadout.focusRegen;
+  player.manaRegenMult = loadout.focusRegen * potionFocusRegenMult();
   const username = opts.username ?? (window as unknown as { psyrena?: { profile?: { username?: string } } }).psyrena?.profile?.username;
   const me = party ? (first!.players.find((p) => p.name === username)?.id ?? first!.players[0].id) : "me";
   const sim = new SurvivalSim({

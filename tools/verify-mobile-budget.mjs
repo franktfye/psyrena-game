@@ -18,9 +18,9 @@
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
 
-/** Boot JS limits in MiB. Measured 2026-10-11: 2.91 raw / 0.57 brotli. */
-const BOOT_JS_RAW_MB = 3.0;
-const BOOT_JS_BR_MB = 0.6;
+/** Boot JS limits in MiB. Measured 2026-10-25: 2.985 raw / 0.595 brotli. */
+const BOOT_JS_RAW_MB = 2.986;
+const BOOT_JS_BR_MB = 0.596;
 
 const BARREL = /^\s*import\s+(?!type\b)[^;]*?from\s+["']@babylonjs\/(core|gui|loaders|materials)(\/index(\.js)?)?["']/m;
 const BARE_SIDE_EFFECT = /^\s*import\s+["']@babylonjs\/(core|gui|loaders|materials)(\/index(\.js)?)?["']/m;

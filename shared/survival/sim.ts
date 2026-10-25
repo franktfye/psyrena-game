@@ -560,12 +560,16 @@ export class SurvivalSim {
     }
   }
 
-  /** Nearest damageable hostile to (x, z) within `maxD`, preferring elites/bosses at equal-ish range. */
+  /**
+   * Nearest damageable hostile to (x, z) within `maxD`, preferring elites/bosses at equal-ish range.
+   * Invulnerable ones (an Afterimage's decoy twin, a Falling Dream still in the air) are skipped:
+   * the auto-target is the player's only aim, and locking onto a decoy made every cast a silent 0.
+   */
   nearestHostile(x: number, z: number, maxD = 22): Hostile | null {
     let best: Hostile | null = null;
     let bestScore = maxD * maxD;
     for (const h of this.hostiles) {
-      if (h.state === "dead" || (h.invisibleUntil ?? 0) > this.t) continue;
+      if (h.state === "dead" || h.invulnerable || (h.invisibleUntil ?? 0) > this.t) continue;
       const d2 = (h.x - x) ** 2 + (h.z - z) ** 2;
       const score = h.kind === "minion" ? d2 : d2 * 0.6;
       if (score < bestScore) { best = h; bestScore = score; }
