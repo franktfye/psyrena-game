@@ -158,6 +158,10 @@ void stage_teen_latency    "Quiet now… I'm studying how you break." "low and q
 # Seed pinned: the stem seed said "Oh, at last"; 503 says "Whole" (Whisper hears the homophone "Hole").
 void stage_adult_genital   "Whole at last. Now pay me what desire is owed." "triumphant and regal, a slow verdict" 503
 
+# ---- Psyche orbs (every 10% of HP lost: Id, Ego and Superego fall) ----------
+# "The" in front of each name: alone, a bass "Id" reads as "Hide". Seed 704 is word-perfect.
+void orbs_psyche "The Id. The Ego. The Superego. Your whole mind… falling down on you." "slow and grand, each name a hammer blow, then a cruel promise" 704
+
 # ---- Defense-mechanism barks (P3) ------------------------------------------
 void defense_repression   "What hit? I felt nothing. Nothing at all." "dismissive and bored"
 void defense_denial       "That didn't happen. Your eyes are lying." "flat, utterly certain contempt"

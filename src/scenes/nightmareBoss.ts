@@ -168,6 +168,8 @@ export interface NightmareBoss {
    * and let go of the aim when the clip ends.
    */
   sweep(aim: Vector3 | null, wide?: boolean): void;
+  /** Speak one pack line by stem (public/assets/bosses/voice/<stem>), cutting whatever plays. */
+  speak(stem: string): void;
   dispose(): void;
 }
 
@@ -1475,6 +1477,7 @@ export async function buildNightmare(
     setCombatAnchors: () => {},
     strike: () => {},
     sweep: () => {},
+    speak: () => {},
     dispose: disposeAll,
   };
 
@@ -1637,6 +1640,10 @@ export async function buildNightmare(
   };
 
   boss.strike = strikeVisual;
+
+  boss.speak = (stem) => {
+    if (phase !== "dead") voice.say(stem);
+  };
 
   boss.sweep = (aim, wide = false) => {
     if (phase === "dead" || phase === "idle") return;

@@ -472,6 +472,21 @@ export async function setupArenaCombat(
         if (!heroDead && inside(hero.node.position)) driver.fanHit(f.id);
       });
     },
+    // Corrupted psyche orbs: Id, Ego, Superego fall under their shadows.
+    bossOrbs: (v) => {
+      if (!fans) return;
+      const at = v.orbs.map((o) => {
+        const a = o.anchorIsPlayer ? hero.node.position : (teammateChest(o.anchorName) ?? hero.node.position);
+        return new Vector3(a.x + o.dx, 0, a.z + o.dz);
+      });
+      nightmare.speak("orbs_psyche");
+      nightmare.sweep(null, true); // the two-hand blast: it throws them up
+      playSfx("boss.orb.fall");
+      fans.castOrbs(v, at, (i, inside) => {
+        playSfx("boss.orb.land");
+        if (!heroDead && inside(hero.node.position)) driver.fanHit(v.orbs[i]!.id);
+      });
+    },
     // Sim-only beats → sounds. The sim names the moment, this table names
     // the file — kit sub-events and boss telegraphs share one channel.
     sfxEvent: (name) =>

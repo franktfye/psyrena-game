@@ -38,7 +38,7 @@ import {
   resolveUltimate,
   type MatchFormat,
 } from "../combat.ts";
-import type { BossFightScript, FightFan, FightPhaseId, SimAllySpec } from "../bosses/nightmare.ts";
+import type { BossFightScript, FightFan, FightOrbs, FightPhaseId, SimAllySpec } from "../bosses/nightmare.ts";
 import type { Effect, Hero, OverTime } from "../types.ts";
 import {
   castAddon,
@@ -78,6 +78,12 @@ export interface FightHooks {
    * follows `isPlayer`'s rule: "this client's hero" once a driver replays it.
    */
   bossFan?(fan: BossFanView): void;
+  /**
+   * Corrupted psyche orbs (FightOrbs): three orbs fall for `fallS`, each
+   * landing at its anchor hero's position (as the client sees it at the cast)
+   * plus (dx, dz). Each orb id is reported like a fan id (driver.fanHit).
+   */
+  bossOrbs?(volley: BossOrbsView): void;
   /** Damage the player (writes the player store → HUD HP bar). */
   damagePlayer(amount: number, actorId?: string): void;
   healPlayer(amount: number, actorId?: string): void;
@@ -209,6 +215,21 @@ export interface BossFanView {
   windupS: number;
   /** True for the last phase's widened sweep — the scene dresses it hotter. */
   wide: boolean;
+}
+
+/** One volley of corrupted psyche orbs, as `FightHooks.bossOrbs` hands it to the scene. */
+export interface BossOrbsView {
+  orbs: {
+    id: number;
+    name: "Id" | "Ego" | "Superego";
+    anchorName: string;
+    anchorId: string;
+    anchorIsPlayer: boolean;
+    dx: number;
+    dz: number;
+  }[];
+  fallS: number;
+  radiusM: number;
 }
 
 /** Seconds after a fan lands that a hit report still counts (network hop + a slow frame). */
@@ -749,6 +770,10 @@ export class BossFight {
   private fanSeq = 0;
   /** Live fans: landing time, scaled base damage, and who already took it. */
   private fans = new Map<number, { landsAt: number; hitDamage: number; hit: Set<string> }>();
+  /** Orbs: 10%-of-HP marks already answered, a mark waiting out the cooldown, and when it may fire. */
+  private orbMarks = 0;
+  private orbPending = false;
+  private orbReadyAt = 0;
 
   /**
    * Everyone in the fight, primary first. `actors[0]` is what every legacy
@@ -2642,6 +2667,20 @@ export class BossFight {
       this.nextFanAt += phase.fan.periodS;
       if (this.phaseT + phase.fan.windupS < phase.durationS) this.castFan(phase.fan, phase.id === "p4");
     }
+    // Psyche orbs: a new 10% mark arms one volley; the cooldown and held phases delay it.
+    const orbs = this.script.orbs;
+    if (orbs) {
+      const marks = Math.floor(((1 - this.hp / this.hpMax) * 100) / orbs.everyPct + 1e-9);
+      if (marks > this.orbMarks) {
+        this.orbMarks = marks;
+        this.orbPending = true;
+      }
+      if (this.orbPending && this.simT >= this.orbReadyAt && !orbs.holdIn.includes(phase.id) && this.hp > 0) {
+        this.orbPending = false;
+        this.orbReadyAt = this.simT + orbs.cooldownS;
+        this.castOrbs(orbs);
+      }
+    }
     for (const [id, f] of this.fans) if (this.simT > f.landsAt + FAN_REPORT_GRACE_S) this.fans.delete(id);
 
     // ---- operant engine (Skinner) ------------------------------------------
@@ -2972,6 +3011,34 @@ export class BossFight {
       id, name: fan.name, targetName: target.name, targetId: target.id, targetIsPlayer: target === this.primary,
       halfAngleDeg: fan.halfAngleDeg, radiusM: fan.radiusM, windupS: fan.windupS, wide,
     });
+  }
+
+  /**
+   * Drop Id, Ego and Superego. With several real players, each orb opens on a
+   * different one; the rest fall 5–7 m around the first, so a lone hero has
+   * one on their head and two closing the nearby ground. Each orb registers
+   * like a fan (same report window, same scaling).
+   */
+  private castOrbs(o: FightOrbs): void {
+    const live = this.actors.filter((c) => c.alive);
+    const pool = live.some((c) => c.input) ? live.filter((c) => c.input) : live;
+    if (!pool.length) return;
+    const shuffled = [...pool].sort(() => Math.random() - 0.5);
+    const names = ["Id", "Ego", "Superego"] as const;
+    const view: BossOrbsView = { orbs: [], fallS: o.fallS, radiusM: o.radiusM };
+    for (const [i, name] of names.entries()) {
+      const own = shuffled[i];
+      const anchor = own ?? shuffled[0]!;
+      const a = Math.random() * Math.PI * 2;
+      const r = own ? 0 : 5 + Math.random() * 2;
+      const id = ++this.fanSeq;
+      this.fans.set(id, { landsAt: this.simT + o.fallS, hitDamage: o.hitDamage, hit: new Set() });
+      view.orbs.push({
+        id, name, anchorName: anchor.name, anchorId: anchor.id, anchorIsPlayer: anchor === this.primary,
+        dx: Math.sin(a) * r, dz: Math.cos(a) * r,
+      });
+    }
+    this.hooks.bossOrbs?.(view);
   }
 
   /**

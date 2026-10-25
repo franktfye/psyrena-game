@@ -84,6 +84,24 @@ export interface P2Debuff {
   armorShredPerStack: number;
 }
 
+/**
+ * Corrupted psyche orbs: every time the boss loses another `everyPct` of its
+ * max HP, three orbs (Id, Ego, Superego) fall slowly onto the floor, each with
+ * its shadow as the warning circle. Not more often than `cooldownS`; a mark
+ * crossed during the cooldown fires when it ends. Positional like FightFan:
+ * the sim owns the clock and the damage, clients draw and report.
+ */
+export interface FightOrbs {
+  everyPct: number;
+  cooldownS: number;
+  /** Seconds from the cast to the landing: the time to step out of the shadow. */
+  fallS: number;
+  radiusM: number;
+  hitDamage: number;
+  /** Phases that hold the cast back (a pending mark waits them out). */
+  holdIn: FightPhaseId[];
+}
+
 export interface BossFightScript {
   bossId: string;
   displayName: string;
@@ -108,6 +126,8 @@ export interface BossFightScript {
   heroHp: number;
   /** World-chat warning lead time before each phase change. */
   phaseWarningS: number;
+  /** Optional: the corrupted psyche orbs (FightOrbs). */
+  orbs?: FightOrbs;
 }
 
 export const NIGHTMARE_STANDARD: BossFightScript = {
@@ -179,6 +199,9 @@ export const NIGHTMARE_STANDARD: BossFightScript = {
   },
   heroHp: 1_000, // ASSUMED — see interface note
   phaseWarningS: 5,
+  // Every 10% of HP lost: Id, Ego and Superego fall. 30 s apart at most;
+  // never during Shapeshift, where the party is reading the dolls.
+  orbs: { everyPct: 10, cooldownS: 30, fallS: 3, radiusM: 3.2, hitDamage: 250, holdIn: ["p2"] },
 };
 
 /**

@@ -110,6 +110,9 @@ const SFX = {
   "boss.fan.windup": { files: ["moonbeam-intro-v1-003"], gain: 0.5 },
   "boss.fan.land": { files: ["meleeattack-swoosh-heavy-group01-00"], gain: 0.75 },
   "boss.fan.land.wide": { files: ["thunderclap-001"], gain: 0.7 },
+  // Psyche orbs: the throw, then each one hitting the floor.
+  "boss.orb.fall": { files: ["eldritch-blast-001"], gain: 0.6 },
+  "boss.orb.land": { files: ["meleeattack-impacts-bludgeoning-03"], gain: 0.8 },
   "fight.phase.warning": { files: ["detect-magic-001"], gain: 0.7 },
   "fight.victory": { files: ["bless-v1-005"] },
   "fight.defeat": { files: ["toll-the-dead-001"] },

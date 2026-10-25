@@ -20,8 +20,6 @@ import {
   declineInvite,
   refreshRoomsPanel,
 } from "./ui/roomsPanel";
-import { closePartyInvite, showPartyInvite } from "./ui/invitePopup";
-import { closeFriendRequest, showFriendRequest } from "./ui/friendRequestPopup";
 import { enterRankedArena } from "./fight/arenaEntry";
 import { postFightSkip } from "./net/economy";
 import { DIFFICULTY_ORDER, setDifficulty, type FightDifficulty } from "./fight/difficulty";
@@ -226,8 +224,11 @@ function showKickedOverlay(): void {
   if (document.getElementById("kicked")) return;
   // Every social card left on screen is now a button that posts on a session
   // the server already deleted. Take them down with the session.
-  closePartyInvite();
-  closeFriendRequest();
+  // The cards load lazily (CLAUDE.md rule 2): drop their DOM now, reset their state as they load.
+  document.getElementById("party-invite")?.remove();
+  document.getElementById("friend-request")?.remove();
+  void import("./ui/invitePopup").then((m) => m.closePartyInvite());
+  void import("./ui/friendRequestPopup").then((m) => m.closeFriendRequest());
   const wrap = document.createElement("div");
   wrap.id = "kicked";
   wrap.style.cssText =
@@ -335,7 +336,7 @@ async function main(): Promise<void> {
   // makes an invite arrive rather than sit there unnoticed.
   social.onInvite = ({ roomId, name, from }) => {
     chat.announce(`✉ ${from} invited you to their party — ${name}.`);
-    showPartyInvite({ roomId, name, from }, { onJoin: joinRoom, onDecline: declineInvite });
+    void import("./ui/invitePopup").then((m) => m.showPartyInvite({ roomId, name, from }, { onJoin: joinRoom, onDecline: declineInvite }));
   };
 
   // Friend request — a popup, for the invite card's reason. Tapping a villager
@@ -346,12 +347,14 @@ async function main(): Promise<void> {
   // answering there are the same act.
   social.onFriendRequest = ({ from, hero }) => {
     chat.announce(`✦ ${from} wants to be friends.`);
-    showFriendRequest(
-      { from, hero },
-      {
-        onAccept: (username) => social.friendOp("accept", username),
-        onDecline: (username) => social.friendOp("decline", username),
-      }
+    void import("./ui/friendRequestPopup").then((m) =>
+      m.showFriendRequest(
+        { from, hero },
+        {
+          onAccept: (username) => social.friendOp("accept", username),
+          onDecline: (username) => social.friendOp("decline", username),
+        }
+      )
     );
   };
 
