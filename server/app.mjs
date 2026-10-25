@@ -10,7 +10,7 @@
  * realtime combat authority — that stays with the Colyseus server planned in
  * docs/06. Keep gameplay-tuning data out of here.
  */
-import { serverLoad } from "./serverLoad.mjs";
+import { serverLoad, loginGateClosed } from "./serverLoad.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { scrypt, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -1179,6 +1179,8 @@ const REGISTER_RATE = { windowMs: 3_600_000, max: Number(process.env.PSYRENA_REG
 const INVITE_RATE = { windowMs: 60_000, max: 8 };
 const INVITE_REPEAT = { windowMs: 30_000, max: 1 };
 const authHits = new Map();
+/** What a turned-away login or registration reads (serverLoad.mjs gate). */
+const SERVER_FULL_MSG = "The server is nearly full right now. Players already inside keep playing — please try again in a few minutes.";
 function rateLimited(key, { windowMs, max }) {
   const now = Date.now();
   const hits = (authHits.get(key) ?? []).filter((t) => now - t < windowMs);
@@ -1303,6 +1305,12 @@ export async function handleApi(req, res) {
       const user = typeof username === "string" && typeof password === "string"
         ? db.prepare("SELECT * FROM users WHERE username = ?").get(username.trim())
         : null;
+      // Nearly full (serverLoad.mjs gate): no new sessions, and refused BEFORE
+      // the scrypt check so a rush of logins cannot add to the load. Players
+      // already in keep playing; admins always get in (to watch, or to fix it).
+      if (loginGateClosed() && !user?.is_admin) {
+        return send(res, 503, { error: SERVER_FULL_MSG, full: true }), true;
+      }
       // Unknown users still pay the scrypt cost (against DUMMY_CRED) so the
       // response time never says whether the username exists.
       const ok = user
@@ -1324,6 +1332,8 @@ export async function handleApi(req, res) {
     }
 
     if (route === "POST /api/register") {
+      // A new account is a new session: the same gate as login.
+      if (loginGateClosed()) return send(res, 503, { error: SERVER_FULL_MSG, full: true }), true;
       if (rateLimited(`reg:${clientIp(req)}`, REGISTER_RATE)) {
         return send(res, 429, { error: "Too many new accounts from this address — try again later." }), true;
       }

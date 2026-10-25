@@ -434,11 +434,11 @@ views.invites = async () => {
       el("div", { class: "row" },
         el("span", {}, required
           ? "Registration currently REQUIRES an invitation code."
-          : "Registration is OPEN — anyone can create an account; codes are optional."),
+          : "Registration is OPEN — anyone can create an account; codes are optional. The sign-up page shows a \"no invitation code needed\" notice."),
         envOpen
           ? el("span", { class: "dim" }, "(forced open by PSYRENA_INVITE_REQUIRED=0)")
           : el("button", { class: "act" + (required ? "" : " danger"), onclick: async () => {
-              if (required && !confirmDo("Allow FREE registration? Anyone who can reach the site will be able to create an account.")) return;
+              if (required && !confirmDo("Allow FREE registration? Anyone who can reach the site will be able to create an account, and the sign-up page will show a \"no invitation code needed\" notice.")) return;
               try {
                 await api("/api/admin/invites/policy", { required: !required });
                 views.invites();
