@@ -142,7 +142,7 @@ function frameOf(s) {
       id: h.id, kind: h.kind, def: h.def, model: h.model, x: r2(h.x), z: r2(h.z), facing: r2(h.facing), radius: h.radius,
       hp: Math.round(h.hp), hpMax: h.hpMax, state: h.state, stateT: r2(h.stateT), born: r2(h.born),
       invulnerable: h.invulnerable, twinOf: h.twinOf, ageTag: h.ageTag, debuffUntil: h.debuffUntil,
-      invisibleUntil: h.invisibleUntil, notches: h.notches, stacks: h.stacks,
+      invisibleUntil: h.invisibleUntil, notches: h.notches, stacks: h.stacks, form: h.form, copyNext: h.copyNext,
       dotted: h.dots?.length ? true : undefined,
     })),
     zones: sim.zones.map((z) => ({ id: z.id, player: z.player, x: r2(z.x), z: r2(z.z), r: z.r, ticksLeft: z.ticksLeft, periodS: z.periodS })),

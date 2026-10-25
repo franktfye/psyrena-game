@@ -370,6 +370,8 @@ three differences:
   is rendered and extracted once on Y Bot (`outputs/dreamspawn_ybot` on spark),
   then retargeted to each rig with `m2mr run --skeleton`. Run at most 2 at once
   on spark: 3 parallel calibrations died silently.
+  `finish-clips.mjs` defaults to the 11 hero clips, so pass
+  `--clips idle,walk,attack,death` for a monster.
 
 Ship with `node tools/ship-monster.mjs <id> <minion|elite|boss>`, which writes
 `public/assets/survival/monsters/<id>.glb` after its budget and clip checks. Dream Wisp

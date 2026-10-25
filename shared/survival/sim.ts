@@ -14,11 +14,12 @@
  */
 import {
   DIFFICULTIES, MINIONS, ELITES, BOSSES, QUIZ, THEMES,
-  MINION_HIT, ELITE_HIT, ELITE_RULES, BOSS_RULES, PICKUPS, RECOVERY, BOONS,
+  MINION_HIT, ELITE_HIT, ELITE_RULES, BOSS_RULES, PICKUPS, RECOVERY, BOONS, IMITATOR_RULES, TALL_GLASS_RULES,
   type DifficultyId, type MinionDef, type BossDef, type BoonId, type BossId, type HeroKitId, type QuizItem,
 } from "./content.ts";
 import { buildWalkGrid, inflateGrid, solidBoxes, pushOut, flowField, flowStep, snapToWalkable, cellOf, CELL, type MapDef, type Rect, type WalkGrid } from "./map/layout.ts";
 import { rng } from "./map/lots.ts";
+import { HEROES } from "../heroes/index.ts";
 
 export const HERO_HP = 1000;
 export const HERO_RADIUS = 0.4;
@@ -110,6 +111,16 @@ export interface Hostile {
   skillT?: number;       // elite / boss skill timer
   latched?: string;      // Wraith: player id
   latchUntil?: number;
+  /** Imitator: the skills it has watched land on it, oldest first (it reproduces the oldest). */
+  retained?: RetainedSkill[];
+  /** Imitator: what it will copy next, for the tag over its head (party frames carry this, not `retained`). */
+  copyNext?: string;
+  /** Imitator: seconds Bandura's reproductions have added to this Deterred. */
+  extendS?: number;
+  /** Tall Glass: its current shape; undefined while Conserved (it holds still as itself). */
+  form?: "tall" | "wide";
+  pourT?: number;
+  spillT?: number;
   // Bosses
   appearance?: number;
   awakened?: boolean;
@@ -170,6 +181,8 @@ export const HAZARD_NOTES: Record<string, string> = {
   falling: "Falling Dream: something drops on the circle. Step out.",
   ring: "Stroop ring: step out before it closes.",
   slam: "Slam: get out of the circle before it fills.",
+  copied: "The Imitator copies the skills you hit it with, then uses them on you. Teach it something small. Bandura's Bobo Doll deters it.",
+  pour: "The Tall Glass pours itself: tall hits hard and far, wide spills burning puddles. Piaget's Concrete Operational conserves it.",
 };
 
 /**
@@ -194,6 +207,20 @@ export interface DamageZone {
 export interface Dot { player: string; perTick: number; periodS: number; nextAt: number; ticksLeft: number; cast: HitCast }
 
 export interface HitCast { player: string; slotId: string; kind: string; answersTag?: string; consequence?: string }
+
+/** One skill the Imitator has watched (§4.3): what it was, and whether it was rewarded (a crit). */
+export interface RetainedSkill { slotId: string; kind: string; name: string; crit: boolean }
+
+/** A kit slot id ("freud.oral") as its player-facing name, for the Imitator's copies. */
+export function skillName(slotId: string): string {
+  const hero = HEROES[slotId.split(".")[0]];
+  const slots = hero ? [hero.basic, ...(hero.palette ?? []), hero.defense, hero.chain, hero.ultimate] : [];
+  const found = slots.find((x) => x?.id === slotId)?.name;
+  if (found) return found;
+  // Sim-only slots (Pavlov's CS) are not in the kit table: title-case the tail.
+  const tail = slotId.split(".").pop() ?? slotId;
+  return tail.length <= 3 ? tail.toUpperCase() : tail.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 export interface Projectile { id: number; x: number; z: number; vx: number; vz: number; r: number; pct: number; life: number }
 
@@ -294,6 +321,8 @@ export class SurvivalSim {
   private fieldT = 0;
   private toSpawn = 0;
   private elitesToSpawn = 0;
+  /** Piaget's recent stage casts per player, for the Tall Glass's invariant-sequence bonus. */
+  private stageLog = new Map<string, Array<{ slotId: string; t: number }>>();
   private spawnT = 0;
   private triangleGroup = 0;
   private bossAppear: Record<string, number> = {};
@@ -467,6 +496,14 @@ export class SurvivalSim {
     if (!h || h.state === "dead") return 0;
     // A tick is the same cast landing again: it must not re-fire elite debuffs or Hag pin breaks.
     if (h.kind === "elite" && !tick) this.kitEffect(h, cast);
+    if (!tick) {
+      if (h.def === "imitator") this.retain(h, cast, crit);
+      if (cast.slotId.startsWith("piaget.") && cast.kind === "palette") {
+        const log = this.stageLog.get(cast.player) ?? [];
+        if (log.at(-1)?.slotId !== cast.slotId || this.t - log.at(-1)!.t > 0.5) log.push({ slotId: cast.slotId, t: this.t });
+        this.stageLog.set(cast.player, log.slice(-6));
+      }
+    }
     if (!tick && h.kind === "boss" && this.players.some((p) => this.t < p.pinnedUntil)) {
       h.pinHits = (h.pinHits ?? 0) + 1;
       if (h.pinHits >= 3) for (const p of this.players) p.pinnedUntil = 0;
@@ -816,6 +853,10 @@ export class SurvivalSim {
       hp, hpMax: hp, speed: def.speed, state: "walk", stateT: 0, attackCd: 1.5, born: this.t, dmgMult: this.dmgMult(),
       skillT: 5, stacks: 0, ritualT: 4,
       ageTag: def.id === "repressed" ? AGE_TAGS[Math.floor(this.rand() * AGE_TAGS.length)] : undefined,
+      retained: def.id === "imitator" ? [] : undefined,
+      form: def.id === "tallglass" ? "tall" : undefined,
+      pourT: def.id === "tallglass" ? 4 : undefined,
+      spillT: def.id === "tallglass" ? 0 : undefined,
     };
     this.hostiles.push(h);
     this.events.push({ type: "spawn", id: h.id });
@@ -1077,6 +1118,53 @@ export class SurvivalSim {
           if (far) { h.latched = far.id; h.latchUntil = this.t + 6; }
         }
         break;
+      case "imitator": {
+        const R = IMITATOR_RULES;
+        if (debuffed) {
+          // Deterred: it saw the doll hit back. Slow, and nothing to copy.
+          if (h.state !== "windup") this.move(h, tgt, dist, dt, h.speed * R.deterredMoveMult);
+          this.melee(h, tgt, dist, dt, ELITE_HIT, def.name);
+          h.copyNext = undefined;
+          return;
+        }
+        if (h.skillT! <= 0) {
+          const c = h.retained?.[0];
+          if (c && dist < 16) {
+            h.retained!.shift();
+            this.reproduce(h, tgt, dist, c);
+            h.skillT = R.everyS;
+          } else h.skillT = 1; // nothing learned yet (or nobody near): keep watching
+        }
+        h.copyNext = h.retained?.[0]?.name;
+        if (h.state === "rooted") return;
+        break;
+      }
+      case "tallglass": {
+        const G = TALL_GLASS_RULES;
+        if (debuffed) { h.form = undefined; break; } // Conserved: the same amount, whatever the glass
+        h.form ??= "tall";
+        h.pourT! -= dt;
+        if (h.pourT! <= 0) {
+          // Pour: a splash ring as it changes shape, rooted while it pours.
+          h.form = h.form === "tall" ? "wide" : "tall";
+          h.pourT = G.pourEveryS;
+          this.hazard({ kind: "circle", x: h.x, z: h.z, r: G.splash.r, t: G.splash.t, pct: G.splash.pct, owner: h.id, label: "POUR", note: "pour" });
+          h.state = "rooted";
+          h.stateT = G.splash.t;
+          return;
+        }
+        if (h.form === "wide") {
+          h.spillT! -= dt;
+          if (h.spillT! <= 0) {
+            this.hazard({ kind: "burn", x: h.x, z: h.z, r: G.wide.spillR, t: G.wide.spillS, pct: G.wide.spillPctPerS, owner: h.id, label: "SPILL", note: "pour" });
+            h.spillT = G.wide.spillEveryS;
+          }
+        }
+        const tall = h.form === "tall";
+        if (h.state !== "windup") this.move(h, tgt, dist, dt, h.speed * (tall ? G.tall.speedMult : G.wide.speedMult));
+        this.melee(h, tgt, dist, dt, tall ? { ...ELITE_HIT, pct: ELITE_HIT.pct * G.tall.hitMult, reach: ELITE_HIT.reach * G.tall.reachMult } : ELITE_HIT, def.name);
+        return;
+      }
     }
     if (h.state !== "windup") this.move(h, tgt, dist, dt);
     this.melee(h, tgt, dist, dt, ELITE_HIT, def.name);
@@ -1086,6 +1174,44 @@ export class SurvivalSim {
     const others = this.players.filter((o) => o !== p && o.alive);
     if (!others.length) return 0;
     return Math.min(...others.map((o) => Math.hypot(o.x - p.x, o.z - p.z)));
+  }
+
+  /** Imitator RETENTION: the last few different skills that landed on it, newest last. */
+  private retain(h: Hostile, cast: HitCast, crit: boolean): void {
+    if ((h.debuffUntil ?? 0) > this.t || !h.retained) return; // Deterred: it is not watching
+    const list = h.retained.filter((r) => r.slotId !== cast.slotId);
+    list.push({ slotId: cast.slotId, kind: cast.kind, name: skillName(cast.slotId), crit });
+    h.retained = list.slice(-IMITATOR_RULES.slots);
+  }
+
+  /** Imitator REPRODUCTION: a copied skill comes back as a telegraph shaped by its kind. */
+  private reproduce(h: Hostile, tgt: SimPlayer, dist: number, c: RetainedSkill): void {
+    const R = IMITATOR_RULES;
+    const spec = R.copy[c.kind as keyof typeof R.copy] ?? R.copy.basic;
+    // MOTIVATION: a rewarded original (it crit) is copied harder.
+    const pct = spec.pct * (c.crit ? R.motivatedMult : 1);
+    const label = `${c.crit ? "COPIED!" : "COPIED:"} ${c.name}`;
+    if (spec.shape === "line") {
+      // A lunge along the line (it arrives at the end, like the hound).
+      const d = dist || 1;
+      const len = Math.min(R.copy.basic.len, dist + 3);
+      this.hazard({ kind: "line", x: h.x, z: h.z, x2: h.x + ((tgt.x - h.x) / d) * len, z2: h.z + ((tgt.z - h.z) / d) * len, r: spec.r, t: spec.t, pct, owner: h.id, label, note: "copied" });
+    } else if (spec.shape === "self") {
+      this.hazard({ kind: "circle", x: h.x, z: h.z, r: spec.r, t: spec.t, pct, owner: h.id, label, note: "copied" });
+    } else {
+      this.hazard({ kind: "circle", x: tgt.x, z: tgt.z, r: spec.r, t: spec.t, pct, owner: h.id, label, note: "copied" });
+    }
+    h.state = "rooted";
+    h.stateT = spec.t;
+  }
+
+  /** Piaget cast Sensorimotor, then Preoperational, then this Concrete, inside the window. */
+  private inSequence(player: string): boolean {
+    const log = (this.stageLog.get(player) ?? []).filter((e) => this.t - e.t <= TALL_GLASS_RULES.sequenceWindowS);
+    const order = ["piaget.sensorimotor", "piaget.preoperational"];
+    let i = 0;
+    for (const e of log) if (e.slotId === order[i] && ++i === order.length) return true;
+    return false;
   }
 
   /** §4.3: the hero's own buttons strip an elite's Defended. */
@@ -1113,15 +1239,31 @@ export class SurvivalSim {
         fired = cast.slotId === "ainsworth.strange-situation";
         if (fired) h.latched = undefined;
         break;
+      case "imitator":
+        // The Bobo Doll hits back: vicarious punishment (Bandura, 1965).
+        fired = cast.slotId === "bandura.bobo-doll";
+        if (fired) { h.retained = []; h.extendS = 0; }
+        else if ((h.debuffUntil ?? 0) > this.t && cast.slotId.startsWith("bandura.observe-") && (h.extendS ?? 0) < IMITATOR_RULES.maxExtendS) {
+          // He models it better than it models him: each reproduction keeps it Deterred longer.
+          h.debuffUntil! += IMITATOR_RULES.reproductionExtendS;
+          h.extendS = (h.extendS ?? 0) + IMITATOR_RULES.reproductionExtendS;
+        }
+        break;
+      case "tallglass":
+        fired = cast.slotId === "piaget.concrete";
+        break;
     }
     if (cast.slotId === "ainsworth.secure") for (const o of this.hostiles) if (o.def === "wraith") o.latched = undefined;
     if (fired) {
       const caster = this.player(cast.player);
       const dur = (def.debuffMs / 1000) * (1 + 0.5 * (caster ? this.boon(caster, "insight") : 0));
-      h.debuffUntil = this.t + dur;
+      // Piaget's stages in their invariant order before the Concrete: Conserved holds longer.
+      const ordered = def.id === "tallglass" && this.inSequence(cast.player);
+      h.debuffUntil = this.t + dur + (ordered ? TALL_GLASS_RULES.sequenceBonusS : 0);
+      if (def.id === "tallglass") h.form = undefined;
       if (def.id === "hound") { h.state = "rooted"; h.stateT = def.debuffMs / 1000; }
       if (def.id === "pigeon") h.ritualT = def.debuffMs / 1000;
-      this.events.push({ type: "eliteDebuff", id: h.id, name: def.debuffName });
+      this.events.push({ type: "eliteDebuff", id: h.id, name: ordered ? `${def.debuffName}: in order!` : def.debuffName });
     }
   }
 

@@ -185,9 +185,21 @@ hip_z = crotch + 4.0 if legs_ok else 0.646 * z_arm
 robe = not legs_ok
 
 
+def leg_band(side, z, h):
+    """One leg's slice: within 1.6 torso half-widths of the centre, or, when that
+    is empty, 3.2 (a narrow torso on wide-set legs: the Tall Glass's 9 cm glass
+    over legs 19 cm out left knees and ankles guessed between the legs)."""
+    s = 1 if side == "Left" else -1
+    for reach in (1.6, 3.2):
+        b = [p for p in band(z - h, z + h) if s * p.x > 0 and abs(p.x) < reach * torso_hw]
+        if b:
+            return b
+    return []
+
+
 def leg_x(side, z):
     s = 1 if side == "Left" else -1
-    b = [p for p in band(z - 2, z + 2) if s * p.x > 0 and abs(p.x) < 1.6 * torso_hw]
+    b = leg_band(side, z, 2)
     if robe or not b:
         return s * 0.5 * torso_hw
     xs = [p.x for p in b]
@@ -195,8 +207,7 @@ def leg_x(side, z):
 
 
 def leg_y(side, z):
-    s = 1 if side == "Left" else -1
-    b = [p for p in band(z - 3, z + 3) if s * p.x > 0 and abs(p.x) < 1.6 * torso_hw]
+    b = leg_band(side, z, 3)
     return sum(p.y for p in b) / len(b) if b else 0.0
 
 
