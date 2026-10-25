@@ -25,6 +25,7 @@
 
 import { uiScale, isTypingInField, onAnyTap } from "./inputMode";
 import { createSkillTooltip, type SkillTooltip } from "./skillTooltip";
+import { showCastWarning } from "./castWarning";
 
 export interface BarSlotDef {
   id: string;
@@ -123,7 +124,17 @@ export interface ActionBarOptions {
    * fired for cooldown/GCD refusals: those already read as a dark slot.
    */
   onRefused?: (slot: BarSlotDef) => void;
+  /**
+   * Is there anything to hit? Asked for the BASIC attack only: false refuses
+   * the swing with a "No Target" popup (no cooldown starts). Skills are never
+   * asked — they stay free to cast with nothing in range. Unset = always a
+   * target (the practice pit's dummy never leaves).
+   */
+  hasTarget?: () => boolean;
 }
+
+/** A held basic re-asks every 100 ms; the "No Target" line re-pops at most this often. */
+const NO_TARGET_REPOP_MS = 900;
 
 interface SlotState {
   def: BarSlotDef;
@@ -220,6 +231,8 @@ export class ActionBar {
   private readonly gcdMs: number;
   private readonly canCast: ((slot: BarSlotDef) => boolean) | null;
   private readonly onRefused: ((slot: BarSlotDef) => void) | null;
+  private readonly hasTarget: (() => boolean) | null;
+  private noTargetAt = -Infinity;
   private gcdReadyAt = 0;
   /** True when the mounted basic pays flat damage — see `BarSlotDef.flat`. */
   private readonly flatBasic: boolean;
@@ -356,6 +369,7 @@ export class ActionBar {
     this.gcdMs = opts.gcdMs ?? 0;
     this.canCast = opts.canCast ?? null;
     this.onRefused = opts.onRefused ?? null;
+    this.hasTarget = opts.hasTarget ?? null;
     this.root = document.createElement("div");
     // Named so the panel chrome (ui/panelChrome.ts) can hide the whole bar —
     // desktop row or touch cluster — while a full-screen panel is open.
@@ -1130,6 +1144,15 @@ export class ActionBar {
     const slot = this.slots.get(id);
     if (!slot || now < slot.readyAt) return false;
     if (this.unavailable.has(id)) return false;
+    if (slot.def.kind === "basic" && this.hasTarget && !this.hasTarget()) {
+      // Throttled: holding LMB or the touch corner would otherwise strobe.
+      if (now - this.noTargetAt > NO_TARGET_REPOP_MS) {
+        this.noTargetAt = now;
+        denyFlash(slot.el);
+        showCastWarning("No Target");
+      }
+      return false;
+    }
     // The basic attack lives outside the GCD: it answers only to its own
     // cooldown, so it can weave freely between skill casts (and vice versa).
     // Free presses: the basic (doc 02 exempts it) and a stance toggle, which

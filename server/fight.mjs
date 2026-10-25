@@ -590,6 +590,19 @@ function liveSessionOf(userId) {
 }
 
 /**
+ * The live boss fight this user can come back to after a reload, or null:
+ * a seat in a session that is still being fought (not over, boss not dead).
+ * Read-only — `begin` is what takes the seat again.
+ */
+export function rejoinableFight(userId) {
+  const session = liveSessionOf(userId);
+  if (!session) return null;
+  const phase = session.fight.snapshot().phase;
+  if (phase === "dead") return null;
+  return { key: session.key, roomId: session.roomId, difficulty: session.difficulty, phase };
+}
+
+/**
  * Start the lock.
  *
  * `pending` is the sentence; `until` is only the current attempt at serving

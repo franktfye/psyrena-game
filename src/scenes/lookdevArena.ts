@@ -40,6 +40,7 @@ import { buildNightmare, type NightmarePhase } from "./nightmareBoss";
 import { setupArenaCombat, type ArenaCombat } from "../fight/arenaCombat";
 import { isPracticeMode } from "../fight/practice";
 import { awaitPartyFightStart } from "../fight/fightReadyGate";
+import { arenaRejoin, clearArenaRejoin } from "../fight/rejoin";
 import { closeLootPanel, reopenLastLoot } from "../ui/lootPanel";
 import { startBossCountdown } from "../ui/bossCountdown";
 import { sstep, fbm, createSoftRingTexture } from "../vfx/softSprites";
@@ -258,7 +259,9 @@ export async function createLookdevArena(engine: AbstractEngine, heroId?: string
   // Pre-activation countdown: the sim starts ticking its idleS the moment
   // setupArenaCombat returns, so the overlay counts down on the same
   // render-loop dt and fades out exactly as the boss engages.
-  if (combat) startBossCountdown(scene, engine);
+  // A rejoin lands mid-fight: there is no countdown left to show.
+  const rejoin = arenaRejoin();
+  if (combat && !rejoin) startBossCountdown(scene, engine);
 
   // Fight-end drops: arenaCombat reports each attempt and handles the DOM
   // overlays; the scene's part is the 3D loot box next to the dead boss
@@ -372,7 +375,13 @@ export async function createLookdevArena(engine: AbstractEngine, heroId?: string
   // until this factory returns, so the boss engages simultaneously for
   // everyone. Practice runs (and solo players, via the server's `solo`
   // answer) skip the wait.
-  if (combat && !isPracticeMode()) {
+  if (combat && rejoin) {
+    // Back into a fight already under way: no barrier to wait at, but the
+    // party's presence session still has to be joined to see the teammates.
+    clearArenaRejoin();
+    // Only a `room:` session is a party fight (a solo one may still carry the room it was launched from).
+    if (rejoin.key.startsWith("room:") && rejoin.roomId !== null) combat.wireParty(rejoin.roomId);
+  } else if (combat && !isPracticeMode()) {
     const bootMsg = document.getElementById("boot-msg");
     const roomId = await awaitPartyFightStart((msg) => {
       if (bootMsg) bootMsg.textContent = msg;

@@ -13,6 +13,7 @@
  */
 
 import { enterFullscreen, fullscreenSupported, isStandalone } from "./fullscreen";
+import type { RejoinInfo } from "../fight/rejoin";
 
 export interface Profile {
   username: string;
@@ -24,6 +25,11 @@ export interface Profile {
   stats: { battles: number; wins: number; bossesDefeated: number; playtimeMin: number };
   selectedHero: string;
   unlockedHeroes: string[];
+  /**
+   * Set by the auth flow (never by the server's profile) when the player came
+   * back to a fight still running — main.ts routes there instead of the village.
+   */
+  rejoin?: RejoinInfo;
   /**
    * Battle record per hero actually played, most-played first (server
    * hero_records — one upsert per fight report). Heroes with no battles have
@@ -927,6 +933,18 @@ export async function runAuthFlow(): Promise<Profile> {
     const login = loginScreen(root);
     showHomescreenPopup(root);
     profile = await login;
+  }
+
+  // A fight still running for this player (a reload mid-fight): one tap back
+  // into it instead of the guide and the picker — the hero is the one already
+  // seated in that fight. The tap is kept on purpose: fullscreen and audio
+  // need a gesture on phones, which the picker's Enter used to provide.
+  // Lazy (CLAUDE.md rule 2): every login asks, few ever need the screen.
+  const { fetchRejoin, rejoinScreen } = await import("./rejoinScreen");
+  const rejoin = await fetchRejoin();
+  if (rejoin && (await rejoinScreen(root, rejoin))) {
+    root.remove();
+    return { ...profile, rejoin };
   }
 
   // The intro guide sits between login and the picker every time: it is the

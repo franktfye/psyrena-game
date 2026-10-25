@@ -60,6 +60,12 @@ function sessionOf(userId) {
   return null;
 }
 
+/** The party run this user can come back to after a reload, or null. */
+export function rejoinableSurvival(userId) {
+  const s = sessionOf(userId);
+  return s ? { session: s.id, difficulty: s.difficulty } : null;
+}
+
 /** A party room's members, for a party launch. */
 function roomMembers(roomId) {
   return db.prepare("SELECT user_id FROM room_members WHERE room_id = ?").all(roomId).map((m) => Number(m.user_id));
@@ -82,6 +88,8 @@ function startSession(members, difficulty) {
     lastInput: new Map(members.map((m) => [m, now])),
     /** Members whose client has sent at least one input (loaded the run). */
     ready: new Set(), startedAt: now, running: false,
+    /** HP of members downed for SILENCE (not by a hit): a reloaded tab comes back on its first input with it. */
+    droppedHp: new Map(),
     dmgWindow: new Map(members.map((m) => [m, []])),
     healWindow: new Map(members.map((m) => [m, []])),
     lastPos: new Map(), names: new Map(),
@@ -114,6 +122,7 @@ function step(s) {
     const p = s.sim.player(String(uid));
     // Never drop someone for silence before they have ever spoken (still loading).
     if (p?.alive && s.ready.has(uid) && now - s.lastInput.get(uid) > DROP_MS) {
+      s.droppedHp.set(uid, p.hp);
       p.alive = false;
       p.hp = 0;
       s.sim.events.push({ type: "playerDown", player: p.id });
@@ -199,6 +208,18 @@ function applyInput(s, uid, body) {
     if (hpMax !== p.hpMax) { p.hp = Math.round((p.hp / p.hpMax) * hpMax); p.hpMax = hpMax; }
     // A late loader (past the barrier timeout) comes in on its first word.
     if (s.running && !p.alive && p.hp === 0 && s.sim.phase !== "victory" && s.sim.phase !== "defeat") { p.alive = true; p.hp = p.hpMax; }
+  }
+  // Back from a silence drop (a reload, a tunnel): they were downed for being
+  // gone, not beaten, so they rejoin standing with the HP they left with.
+  // `/leave` zeroes lastInput but never sets this, so an explicit leave stays down.
+  if (s.droppedHp.has(uid)) {
+    const hp = s.droppedHp.get(uid);
+    s.droppedHp.delete(uid);
+    if (s.running && !p.alive && s.sim.phase !== "victory" && s.sim.phase !== "defeat") {
+      p.alive = true;
+      p.hp = Math.max(1, Math.min(p.hpMax, hp));
+      s.sim.events.push({ type: "revive", player: id });
+    }
   }
   if (!s.running) return; // positions before the start would teleport-drift; just count as loaded
   let dashed = false;
