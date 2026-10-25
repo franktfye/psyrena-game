@@ -45,6 +45,7 @@ import type { Hero } from "../../shared/types";
 import { FOCUS, focusCostFor, type CostKind } from "../../shared/fight/costs";
 import type { FightResultResponse } from "../net/economy";
 import { player } from "../state/player";
+import { isUnloading } from "../core/pageLife";
 
 /** Everything a cast can be. `stance` is a toggle, not a cast — see below. */
 export type DriverCastKind = Exclude<CostKind, "stance">;
@@ -424,6 +425,12 @@ export class RemoteFightDriver implements FightDriver {
       /** Built by the arena either way; only ticked if the server drops out. */
       local: LocalFightDriver;
       hooks: FightHooks;
+      /**
+       * Re-attach to the session this player already holds a seat in (a
+       * reload mid-fight): skip the fresh-attempt `/end`, and replay the live
+       * phase into the hooks, whose phase events this tab never saw.
+       */
+      rejoin?: boolean;
     }
   ) {
     // A reinforcement kit opens on Positive/Reinforcement (the sim's
@@ -469,7 +476,7 @@ export class RemoteFightDriver implements FightDriver {
       // last visit abandoned, already three phases deep. Leaving a PARTY's
       // fight only gives up this seat (server/fight.mjs), so a teammate
       // re-entering still lands back in the same fight.
-      await post("/api/fight/sim/end", {}).catch(() => undefined);
+      if (!this.opts.rejoin) await post("/api/fight/sim/end", {}).catch(() => undefined);
       const first = await post<{ key: string; snap: FightSnapshot; you: FightStateFrame["you"] }>(
         "/api/fight/sim/begin",
         { difficulty: this.opts.difficulty, pet: this.opts.petId ?? undefined }
@@ -480,6 +487,7 @@ export class RemoteFightDriver implements FightDriver {
       this.key = first.key;
       this.frame = { t: 0, key: first.key, party: 1, snap: first.snap, you: first.you, events: [] };
       this.stance = first.you.stance;
+      if (this.opts.rejoin && first.snap.phase !== "idle") this.opts.hooks.setBossPhase(first.snap.phase);
       setTimeout(() => {
         if (!this.disposed && !this.fallback && !this.streaming) {
           this.goLocal(new Error(`no fightState frame in ${FIRST_FRAME_TIMEOUT_MS} ms`));
@@ -747,6 +755,7 @@ export class RemoteFightDriver implements FightDriver {
     this.unsubscribe = null;
     this.unsubscribeResult?.();
     this.unsubscribeResult = null;
-    if (!this.fallback) void post("/api/fight/sim/end", {}).catch(() => undefined);
+    // A reload is not a leave: keep the seat for the tab that comes back.
+    if (!this.fallback && !isUnloading()) void post("/api/fight/sim/end", {}).catch(() => undefined);
   }
 }

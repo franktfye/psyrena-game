@@ -71,6 +71,7 @@ import {
   type FightResultFrame,
 } from "./fightDriver";
 import { wireBasicAttack } from "./basicAttack";
+import { arenaRejoin } from "./rejoin";
 import { DIFFICULTY, getDifficulty } from "./difficulty";
 import { getPracticeDifficulty, isPracticeMode } from "./practice";
 import { postFightResult, getPartySeat, type FightResultResponse } from "../net/economy";
@@ -439,6 +440,8 @@ export async function setupArenaCombat(
   let fans: FanTelegraphs | null = null;
   if (!headless) void import("./fanTelegraph").then((m) => (fans = m.createFanTelegraphs(scene)));
   const BOSS_FLOOR = new Vector3(0, 0, 0);
+  /** The boss is a target only while engaged (p1–p4): not dormant before the pull, not dead. */
+  let bossPhase = "idle";
 
   const hooks: FightHooks = {
     conditioningChanged: (s) => onConditioning?.(s),
@@ -447,6 +450,7 @@ export async function setupArenaCombat(
     modelingChanged: (s) => onModeling?.(s),
     announce: announceWorld,
     setBossPhase: (p) => {
+      bossPhase = p;
       // The two audible entrances: idle→p1 is the pull the countdown was
       // building to, p3 is the armor slamming on.
       if (p === "p1") playSfx("fight.boss.engage");
@@ -647,6 +651,7 @@ export async function setupArenaCombat(
           subscribeResult: (cb) => social.onFightResult((r) => cb(r as FightResultFrame)),
           local,
           hooks,
+          rejoin: arenaRejoin() !== null,
         });
   scene.onDisposeObservable.add(() => driver.dispose());
 
@@ -1211,6 +1216,10 @@ export async function setupArenaCombat(
         onRefused: (slot) => {
           if (!heroDead && driver.self().focus < focusCost(slot))
             showCastWarning("Not enough Focus");
+        },
+        hasTarget: () => {
+          const p = lastSnap?.phase ?? bossPhase;
+          return p !== "idle" && p !== "dead";
         },
       }
     );

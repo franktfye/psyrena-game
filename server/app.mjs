@@ -18,7 +18,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   initSocial, handleSocial, pushTo, notifyFriendsOf, markOffline, collectOfflineExpired,
-  droppedOut,
+  droppedOut, refreshOfflineGrace,
 } from "./social.mjs";
 import {
   initEconomy,
@@ -29,9 +29,9 @@ import {
   HERO_UNLOCK_WINS,
 } from "./economy.mjs";
 import { initVillage, handleVillage, leaveVillage } from "./village.mjs";
-import { initSurvival, handleSurvival } from "./survival.mjs";
+import { initSurvival, handleSurvival, rejoinableSurvival } from "./survival.mjs";
 import {
-  initFight, handleFightSim, deserterLockFor, markFightAbandon, restartDeserterClock,
+  initFight, handleFightSim, deserterLockFor, markFightAbandon, restartDeserterClock, rejoinableFight,
 } from "./fight.mjs";
 import { initAchievements, handleAchievements } from "./achievements.mjs";
 import { initCoffee, handleCoffee } from "./coffee.mjs";
@@ -1521,7 +1521,22 @@ export async function handleApi(req, res) {
 
     if (route === "GET /api/me") {
       if (!userId) return send(res, 401, { error: "Not logged in." }), true;
+      refreshOfflineGrace(userId);
       return send(res, 200, profileFor(userId)), true;
+    }
+
+    // After a reload: is there a fight still running that this player holds a
+    // seat in? The boss session and the party Dream Siege both outlive the tab
+    // (the grace sweep frees them only after OFFLINE_GRACE_MS), so the client
+    // can walk straight back in instead of landing in the village.
+    if (route === "GET /api/rejoin") {
+      if (!userId) return send(res, 401, { error: "Not logged in." }), true;
+      refreshOfflineGrace(userId);
+      const boss = rejoinableFight(userId);
+      if (boss) return send(res, 200, { kind: "boss", ...boss }), true;
+      const siege = rejoinableSurvival(userId);
+      if (siege) return send(res, 200, { kind: "survival", ...siege }), true;
+      return send(res, 200, { kind: null }), true;
     }
 
     if (route === "POST /api/select-hero") {

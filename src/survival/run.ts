@@ -41,6 +41,7 @@ import { createSurvivalHud, openResults, type RunSettlement } from "./hud";
 import { createAnnouncer } from "./announcer";
 import { createSurvivalSfx } from "./sfx";
 import { createSurvivalMusic } from "./music";
+import { isUnloading } from "../core/pageLife";
 
 /** Survival's reach for "every enemy" skills and ground zones (the server clamps to the same). */
 const SURVIVAL_AOE_MAX_M = 8;
@@ -221,6 +222,8 @@ export async function startSurvivalRun(opts: {
     mountTransforming: true,
     simDrivesOperant: true,
     simDrivesPsychosocial: true,
+    // The same reach the cast itself uses (the clicked target, else the nearest within 22 m).
+    hasTarget: () => (!!target && target.state !== "dead") || !!sim.nearestHostile(meP.x, meP.z, 22),
     onCast: (slot, land) => {
       if (slot.kind === "stance") { fight.setThreatStance(bar?.stanceActive() ?? false); return; }
       const mult = kit.beats?.[beat]?.multiplier ?? 1;
@@ -280,6 +283,23 @@ export async function startSurvivalRun(opts: {
 
   // ---- dash --------------------------------------------------------------------------
   let dashT = 0;
+  // The dash plays the hero's own jump for a beat (every hero GLB has
+  // jump_start/jump_land): launch now, land after DASH_HOP_S. Survival has no
+  // jump arc of its own (Space is the dash), so nothing else drives these.
+  const DASH_HOP_S = 0.4;
+  const hops = new Map<HeroHandle, number>();
+  const hop = (h: HeroHandle | null | undefined): void => {
+    if (!h?.animator) return;
+    h.animator.triggerJump();
+    hops.set(h, DASH_HOP_S);
+  };
+  const tickHops = (dt: number): void => {
+    for (const [h, t] of hops) {
+      if (t - dt > 0) { hops.set(h, t - dt); continue; }
+      hops.delete(h);
+      h.animator?.triggerLand();
+    }
+  };
   const dashDir = new Vector3();
   // Where the hero is actually heading: the last real step (stick or WASD),
   // measured from position, so the dash follows movement, not the facing
@@ -297,6 +317,7 @@ export async function startSurvivalRun(opts: {
       dashDir.set(-Math.sin(yaw), 0, -Math.cos(yaw));
     }
     dashT = 0.18;
+    hop(hero);
     // Turn into the dash, so the body leads the burst.
     hero.node.rotation.y = Math.atan2(-dashDir.x, -dashDir.z);
   };
@@ -454,6 +475,8 @@ export async function startSurvivalRun(opts: {
       const p = sim.player(fp.id);
       if (!p) continue;
       const keepX = p.x, keepZ = p.z;
+      // A teammate's spent dash charge is their dash: hop their body too.
+      if (fp.id !== me && Number(fp.dashCharges) < p.dashCharges) hop(remotes.get(fp.id)?.h);
       Object.assign(p, fp);
       if (fp.id === me) {
         // Our own position is predicted locally; snap only on a big disagreement.
@@ -528,6 +551,7 @@ export async function startSurvivalRun(opts: {
         const d = Math.hypot(dx, dz);
         if (dt > 0 && d / dt > 0.8) { moveDir.set(dx / d, 0, dz / d); movedAt = performance.now(); }
       }
+      tickHops(dt);
       if (dashT > 0) {
         const step = Math.min(dashT, dt);
         hero.node.position.addInPlace(dashDir.scale((5 / 0.18) * step));
@@ -588,7 +612,8 @@ export async function startSurvivalRun(opts: {
       window.removeEventListener("keydown", onKey, { capture: true });
       window.removeEventListener("psy:survival", onNet);
       // Leaving a party run mid-way: tell the server so the others are not held.
-      if (party && !ended) void fetch("/api/survival/leave", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
+      // A reload is not a leave: the server's drop rule handles a tab that never returns.
+      if (party && !ended && !isUnloading()) void fetch("/api/survival/leave", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
       for (const r of remotes.values()) r.h?.node.dispose();
       announcer.dispose();
       sfx.dispose();

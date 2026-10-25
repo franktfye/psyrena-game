@@ -9,6 +9,7 @@ import { detectControlScheme, isTypingInField } from "./ui/inputMode";
 import { initPanelChrome } from "./ui/panelChrome";
 import { keepFullscreen } from "./ui/fullscreen";
 import { runAuthFlow, type Profile } from "./ui/authFlow";
+import { markUnloading } from "./core/pageLife";
 import { wardrobe } from "./state/wardrobe";
 import { PlayerHud } from "./ui/playerHud";
 import { ChatPanel } from "./ui/chatPanel";
@@ -483,6 +484,7 @@ async function main(): Promise<void> {
   // pageshow clean up after the rare restore.
   window.addEventListener("pagehide", () => {
     unloading = true;
+    markUnloading();
     releaseGraphics(engine);
   });
 
@@ -532,11 +534,39 @@ async function main(): Promise<void> {
     boot.classList.add("done");
   }
 
+  // Exposed BEFORE the first scene builds: a reload that rejoins a fight builds
+  // the arena (or Old Kowloon) first, and both read `psyrena.social` /
+  // `psyrena.profile` while they build — without it the arena silently fell
+  // back to the offline sim and a party Dream Siege could not find its own row.
+  Object.assign(window, {
+    psyrena: {
+      engine, manager, hud, go, SCENES, profile, player, playerHud, social, chat,
+      // psyrena.quality() / psyrena.setQuality("low" | "medium" | "high" | null)
+      quality: qualityTier, setQuality: setQualityTier,
+      /**
+       * Give the GPU back, then run `then` — for code that is about to
+       * navigate. "Switch Character" (ui/leftDock.ts) reloads the page, and
+       * doing this first is deterministic in a way `pagehide` is not: the
+       * context is gone before the navigation starts rather than during it,
+       * which is the difference between the next page finding a free GPU and
+       * finding ours still on it.
+       */
+      releaseGraphics: (then?: () => void) => {
+        unloading = true;
+        markUnloading();
+        releaseGraphics(engine);
+        then?.();
+      },
+    },
+  });
+
   // Boot into the village. It is the hub, it is the first thing a player sees,
   // and it is where the loop starts (doc 01).
   // `?scene=kowloon` opens the survival map directly (until the survival queue
   // exists to take players there).
-  await go(new URLSearchParams(location.search).get("scene") === "kowloon" ? "kowloon" : "village");
+  // Back from a reload mid-fight (authFlow's rejoin screen): straight into it (lazy, rule 2).
+  if (profile.rejoin) await (await import("./ui/rejoinScreen")).enterRejoin(profile.rejoin, go);
+  else await go(new URLSearchParams(location.search).get("scene") === "kowloon" ? "kowloon" : "village");
   // Made it. Nothing wedged, so the recovery buttons must never appear.
   clearTimeout(stallTimer);
   void registerOfflineCache();
@@ -607,26 +637,6 @@ async function main(): Promise<void> {
   });
 
   // Expose for console poking and for the soak test in sceneManager.ts.
-  Object.assign(window, {
-    psyrena: {
-      engine, manager, hud, go, SCENES, profile, player, playerHud, social, chat,
-      // psyrena.quality() / psyrena.setQuality("low" | "medium" | "high" | null)
-      quality: qualityTier, setQuality: setQualityTier,
-      /**
-       * Give the GPU back, then run `then` — for code that is about to
-       * navigate. "Switch Character" (ui/leftDock.ts) reloads the page, and
-       * doing this first is deterministic in a way `pagehide` is not: the
-       * context is gone before the navigation starts rather than during it,
-       * which is the difference between the next page finding a free GPU and
-       * finding ours still on it.
-       */
-      releaseGraphics: (then?: () => void) => {
-        unloading = true;
-        releaseGraphics(engine);
-        then?.();
-      },
-    },
-  });
 }
 
 main().catch((err) => {

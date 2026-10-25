@@ -32,7 +32,6 @@ import { openGearPanel, closeGearPanel } from "./gearPanel";
 import { openSkinPanel, closeSkinPanel } from "./skinPanel";
 import { openPetPanel, closePetPanel } from "./petPanel";
 import { openHallPanel, closeHallPanel } from "./hallPanel";
-import { openAchievementsPanel, closeAchievementsPanel } from "./achievementsPanel";
 import { openRoomsPanel, closeRoomsPanel } from "./roomsPanel";
 import { gameConfirm } from "./confirmDialog";
 import { closeLootPanel } from "./lootPanel";
@@ -185,6 +184,9 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+/** The achievements panel module, once its button has loaded it. */
+let achievements: typeof import("./achievementsPanel") | null = null;
+
 /** Idempotent — a second mount does nothing. */
 export function mountLeftDock(profile: Profile): void {
   if (document.getElementById("left-dock")) return;
@@ -201,7 +203,8 @@ export function mountLeftDock(profile: Profile): void {
     { title: "Skins — Style Lab", icon: "/assets/ui/gear/skin.webp", open: () => openSkinPanel(profile), close: closeSkinPanel },
     { title: "Pets — Pet Park", icon: "/assets/ui/gear/slot-pet.webp", open: () => openPetPanel(profile), close: closePetPanel },
     { title: "Hall of Minds", icon: "/assets/ui/gear/hall.webp", open: () => openHallPanel(profile), close: closeHallPanel },
-    { title: "Achievements", icon: "/assets/ui/achievements/achievements.webp", open: openAchievementsPanel, close: closeAchievementsPanel },
+    // Lazy (CLAUDE.md rule 3): only this button ever opens it.
+    { title: "Achievements", icon: "/assets/ui/achievements/achievements.webp", open: () => void import("./achievementsPanel").then((m) => (achievements = m).openAchievementsPanel()), close: () => achievements?.closeAchievementsPanel() ?? false },
   ];
 
   const dock = el("div", { id: "left-dock" });

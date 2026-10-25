@@ -766,7 +766,8 @@ export async function createVillageHub(engine: AbstractEngine, profile?: Profile
   // profile), so the bar publishes through this late-bound slot — null until
   // wireVillagePresence fills it, and null again after scene teardown.
   const castAnnounce: CastAnnounce = { fn: null };
-  setupSkillBar(scene, hero, voice, { onCast: (slot) => castAnnounce.fn?.(slot) }, selectedHero);
+  // Nothing in the square to hit: the basic says "No Target", skills still cast.
+  setupSkillBar(scene, hero, voice, { onCast: (slot) => castAnnounce.fn?.(slot), hasTarget: () => false }, selectedHero);
 
   // The equipped pet at his heel — a live slot, so equipping or unequipping
   // in the Pet Park takes effect immediately instead of on the next rebuild.
@@ -5787,6 +5788,11 @@ export interface SkillBarHooks {
    * teaches the same `1-2-1-2` the fight plays.
    */
   simDrivesPsychosocial?: boolean;
+  /**
+   * Is there anything for the basic attack to hit? (`ActionBarOptions.hasTarget`.)
+   * Unset = always (the practice pit's dummy); the village square says never.
+   */
+  hasTarget?: () => boolean;
 }
 
 export function setupSkillBar(
@@ -6238,6 +6244,7 @@ export function setupSkillBar(
       // Mana is the only reason canCast says no here, so every refusal
       // deserves the "why" popup (arena adds a hero-death guard).
       onRefused: () => showCastWarning("Not enough Focus"),
+      hasTarget: hooks.hasTarget,
     }
   );
 

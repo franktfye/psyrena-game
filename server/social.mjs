@@ -64,6 +64,18 @@ export function offlineFor(userId) {
   return at == null ? 0 : Date.now() - at;
 }
 
+/**
+ * The user is demonstrably back (an authenticated page load) but has not
+ * reopened a stream yet: restart a pending grace clock rather than let it run
+ * out under the login screens and the scene boot. A reload is several screens
+ * and a phone's scene compile away from its stream, and losing the session
+ * there turned "refresh" into "logged out and marked a deserter".
+ */
+export function refreshOfflineGrace(userId) {
+  const id = Number(userId);
+  if (offlineSince.has(id) && !clients.has(id)) offlineSince.set(id, Date.now());
+}
+
 /** True once a waiting player's disconnect has outlasted DROP_GRACE_MS. */
 export function droppedOut(userId) {
   return offlineFor(userId) > DROP_GRACE_MS;
