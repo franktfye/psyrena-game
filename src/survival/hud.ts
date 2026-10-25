@@ -33,7 +33,6 @@ const MODAL_CSS = `
 .sv-card .x { width: 32px; height: 32px; font-size: 15px; ${WOW_BTN} }
 .sv-card .x:hover { ${WOW_BTN_HOVER} }
 .sv-card .body { padding: 12px 14px 14px; display: grid; gap: 10px; }
-.sv-card .lede { margin: 0; color: ${WOW_TEXT_DIM}; text-align: center; font-size: clamp(12px, 2.5vh, 14px); }
 .sv-card .modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
 .sv-card .mode { ${WOW_ROW} color: inherit; font: inherit; cursor: pointer; text-align: left; padding: 10px 12px; min-height: 44px; display: grid; gap: 3px; }
 .sv-card .mode:hover, .sv-card .mode:focus-visible { border-color: ${WOW_GOLD}; outline: none; background: #1d1508cc; }
@@ -373,30 +372,13 @@ export function createSurvivalHud(): SurvivalHud {
   };
 }
 
-/** The difficulty picker, shared by the dock button, the village portal and the rooms panel. */
-export function openSurvivalPicker(onPick: (d: DifficultyId) => void): void {
-  injectCss();
-  document.getElementById("sv-modal")?.remove();
-  const m = document.createElement("div");
-  m.id = "sv-modal";
-  const lines: Record<DifficultyId, { feel: string; recall: string; prize: string }> = {
-    lucid: { feel: "Gentle hits", recall: "Wrong answer: lose half your HP", prize: "Clear: Insight cache" },
-    deep: { feel: "Harder hits", recall: "Wrong answer: lose 3/4 of your HP", prize: "Clear: Reverie cache" },
-    terror: { feel: "Full damage", recall: "Wrong answer: you fall", prize: "Clear: Transference cache" },
-  };
-  m.innerHTML = `<div class="sv-card"><div class="head"><h1>DREAM SIEGE</h1><button class="x" data-close aria-label="Close">✕</button></div>
-    <div class="body">
-      <p class="lede">Hold Old Kowloon against the fog. 4 waves, then a boss. Repeat.</p>
-      <div class="modes">${(Object.keys(DIFFICULTIES) as DifficultyId[]).map((d) =>
-        `<button class="mode ${d}" data-d="${d}"><span class="w">${DIFFICULTIES[d].waves} waves · ${lines[d].feel}</span><b>${DIFFICULTIES[d].name}</b><span>${lines[d].recall}</span><i>${lines[d].prize}</i></button>`).join("")}</div>
-    </div></div>`;
-  m.addEventListener("click", (e) => {
-    const t = e.target as HTMLElement;
-    const btn = t.closest("[data-d]") as HTMLElement | null;
-    if (btn) { m.remove(); onPick(btn.dataset.d as DifficultyId); }
-    else if (t.closest("[data-close]") || t === m) m.remove();
-  });
-  document.body.appendChild(m);
+/**
+ * The Dream Siege front door, shared by the dock button and the village gate:
+ * the survival panel (siegePanel.ts) with its own queue, party view and solo
+ * warning. `onSolo` starts a solo run at the picked difficulty.
+ */
+export function openSurvivalPicker(onSolo: (d: DifficultyId) => void): void {
+  void import("./siegePanel").then((m) => m.openSiegePanel(onSolo));
 }
 
 /** What the server paid for the run (null: the settle failed, or an offline run). */

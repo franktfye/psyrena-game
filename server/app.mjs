@@ -1175,6 +1175,9 @@ function clientIp(req) {
 // Env overrides exist so the e2e can register a cast of accounts fast.
 const LOGIN_RATE = { windowMs: 60_000, max: Number(process.env.PSYRENA_LOGIN_RATE_MAX) || 10 };
 const REGISTER_RATE = { windowMs: 3_600_000, max: Number(process.env.PSYRENA_REGISTER_RATE_MAX) || 5 };
+/** Party invites: 8 a minute per sender, and one per target per 30 s. */
+const INVITE_RATE = { windowMs: 60_000, max: 8 };
+const INVITE_REPEAT = { windowMs: 30_000, max: 1 };
 const authHits = new Map();
 function rateLimited(key, { windowMs, max }) {
   const now = Date.now();
@@ -1738,23 +1741,44 @@ export async function handleApi(req, res) {
     }
 
     if (route === "POST /api/rooms/invite") {
+      // Anyone can be invited, not just friends: tapping a stranger in the
+      // village and pressing Invite to Party is how most parties form. The
+      // price of that is spam, so the sender is rate-limited and each target
+      // can be pinged once per INVITE_REPEAT_MS.
       const { username } = await readBody(req);
-      const mine = db.prepare("SELECT room_id FROM room_members WHERE user_id = ?").get(userId);
-      if (!mine) return send(res, 409, { error: "You are not in a room." }), true;
       const target = typeof username === "string"
-        ? db.prepare("SELECT id FROM users WHERE username = ?").get(username.trim())
+        ? db.prepare("SELECT id, username FROM users WHERE username = ?").get(username.trim())
         : null;
       if (!target) return send(res, 404, { error: "No such player." }), true;
-      const isFriend = !!db
-        .prepare(
-          `SELECT status FROM friends WHERE status = 'accepted'
-           AND ((user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?))`
-        )
-        .get(userId, target.id, target.id, userId);
-      if (!isFriend) return send(res, 403, { error: "You can only invite friends." }), true;
-      const already = db.prepare("SELECT room_id FROM room_members WHERE user_id = ?").get(target.id);
-      if (already && Number(already.room_id) === Number(mine.room_id)) {
-        return send(res, 409, { error: "Already in your party." }), true;
+      if (Number(target.id) === Number(userId)) return send(res, 400, { error: "That's you." }), true;
+      let mine = db
+        .prepare("SELECT m.room_id, r.matchmade FROM room_members m JOIN rooms r ON r.id = m.room_id WHERE m.user_id = ?")
+        .get(userId);
+      if (mine?.matchmade) {
+        return send(res, 409, { error: "A matchmade lobby can't take invites." }), true;
+      }
+      if (mine) {
+        const n = Number(db.prepare("SELECT COUNT(*) AS n FROM room_members WHERE room_id = ?").get(mine.room_id).n);
+        if (n >= ROOM_CAP) return send(res, 409, { error: "Your party is full." }), true;
+        const already = db.prepare("SELECT room_id FROM room_members WHERE user_id = ?").get(target.id);
+        if (already && Number(already.room_id) === Number(mine.room_id)) {
+          return send(res, 409, { error: "Already in your party." }), true;
+        }
+      }
+      if (rateLimited(`invite:${userId}`, INVITE_RATE) || rateLimited(`invite:${userId}:${target.id}`, INVITE_REPEAT)) {
+        return send(res, 429, { error: "Slow down — wait a little before inviting again." }), true;
+      }
+      // Not in a room yet: the invite makes one. Private, so it never shows in
+      // the room browser; the invite is the key (POST /api/rooms/join).
+      if (!mine) {
+        const me = db.prepare("SELECT username FROM users WHERE id = ?").get(userId);
+        db.prepare("DELETE FROM queue WHERE user_id = ?").run(userId);
+        const info = db
+          .prepare("INSERT INTO rooms (name, host_id, is_public, difficulty) VALUES (?, ?, 0, 'standard')")
+          .run(`${me ? me.username : "Someone"}'s party`.slice(0, 32), userId);
+        db.prepare("INSERT INTO room_members (user_id, room_id) VALUES (?, ?)")
+          .run(userId, Number(info.lastInsertRowid));
+        mine = { room_id: Number(info.lastInsertRowid), matchmade: 0 };
       }
       db.prepare(
         "INSERT OR REPLACE INTO room_invites (room_id, to_id, from_id) VALUES (?, ?, ?)"

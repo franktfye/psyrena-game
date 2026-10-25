@@ -34,7 +34,6 @@
 import { DIFFICULTY, setDifficulty, getDifficulty, type FightDifficulty } from "../fight/difficulty";
 import { compReminder } from "@shared/teamComp";
 import { heroById } from "@shared/heroes";
-import { openBossGuide } from "./bossGuide";
 import {
   soloQueueSheet,
   teamQueueSheet,
@@ -388,7 +387,8 @@ export function openRoomsPanel(opts: RoomsPanelOptions = configured): void {
     { class: "guide", type: "button", title: "Read up on NIGHTMARE before you pull" },
     "📖 Know Your Enemy"
   );
-  guideBtn.addEventListener("click", () => openBossGuide());
+  // Lazy: read once before a first pull, never needed at boot (CLAUDE.md rule 2).
+  guideBtn.addEventListener("click", () => void import("./bossGuide").then((m) => m.openBossGuide()));
 
   const card = el(
     "div",
@@ -677,25 +677,6 @@ export function openRoomsPanel(opts: RoomsPanelOptions = configured): void {
       start.disabled = !full;
       start.addEventListener("click", () => void act("/api/rooms/launch", {}));
       box.append(start);
-      // Dream Siege for the whole party (server/survival.mjs). The server's
-      // survivalLaunch push walks every member — the leader too — into Old
-      // Kowloon (src/main.ts). Survival takes any party of 2–3, full or not.
-      if (room.members.length >= 2) {
-        const siege = el("button", { class: "cta", type: "button" }, "🌙 Dream Siege (party)") as HTMLButtonElement;
-        siege.addEventListener("click", () => {
-          void import("../survival/hud").then(({ openSurvivalPicker }) =>
-            openSurvivalPicker((difficulty) => {
-              void fetch("/api/survival/launch", {
-                method: "POST", credentials: "same-origin",
-                headers: { "Content-Type": "application/json" }, body: JSON.stringify({ difficulty }),
-              }).then(async (r) => {
-                if (!r.ok) chatError(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "Could not start the Dream Siege.");
-              });
-            })
-          );
-        });
-        box.append(siege);
-      }
       if (!full) {
         // Under-strength is not a button any more. The queue fills the seat;
         // failing that, the 90 s timeout takes you in with whoever is left.
@@ -777,13 +758,4 @@ export function openRoomsPanel(opts: RoomsPanelOptions = configured): void {
   document.body.append(overlay);
   void refresh();
   timer = window.setInterval(() => void refresh(), POLL_MS);
-}
-
-/** Surface a launch refusal without a native dialog (which drops fullscreen). */
-function chatError(text: string): void {
-  const t = document.createElement("div");
-  t.textContent = text;
-  t.style.cssText = "position:fixed;left:50%;top:18%;transform:translateX(-50%);z-index:80;background:#2a1418;color:#ffd3c4;border:1px solid #c94a4a;border-radius:8px;padding:8px 14px;font:14px system-ui";
-  document.body.appendChild(t);
-  window.setTimeout(() => t.remove(), 3500);
 }

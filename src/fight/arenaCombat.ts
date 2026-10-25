@@ -29,12 +29,13 @@ import { ARENA } from "../core/budget";
 import { heroById } from "../../shared/heroes";
 import type { PaletteEntry } from "../../shared/types";
 import { focusCostFor } from "../../shared/fight/costs";
+import type { FanTelegraphs } from "./fanTelegraph";
 import { NIGHTMARE_STANDARD } from "../../shared/bosses/nightmare";
 import { petSpec } from "../../shared/progression";
 import { practiceBotsFor } from "../../shared/bosses/practiceBots";
 import { player } from "../state/player";
 import { playCastSfx, playImpactSfx, playSfx } from "../state/sfx";
-import { potionDamageMult, potionHealingMult } from "../state/potions";
+import { potionDamageMult, potionFocusRegenMult, potionHealingMult } from "../state/potions";
 import { fightLoadout } from "../state/loadout";
 import { ActionBar, type BarSlotDef } from "../ui/actionBar";
 import { showCastWarning } from "../ui/castWarning";
@@ -388,7 +389,8 @@ export async function setupArenaCombat(
   // `begin` declaration all read it, so local and server stats agree.
   const equippedPetId = petForHero(HERO.id);
   const loadout = fightLoadout(HERO.id, equippedPetId);
-  player.manaRegenMult = loadout.focusRegen;
+  // Pet Focus stat × a Cold Brew from the Coffee Shop (server fights apply the cup in server/fight.mjs).
+  player.manaRegenMult = loadout.focusRegen * potionFocusRegenMult();
 
   // The loadout as HUD tiles, beside the potion buffs — without these, a gear
   // or pet upgrade is invisible outside the damage floats. Fight-scoped:
@@ -431,6 +433,13 @@ export async function setupArenaCombat(
    * and it is ALSO what `RemoteFightDriver` replays the server's events into.
    * Every VFX/SFX/HUD path below it is identical in both modes.
    */
+  // Ground fans (the dodgeable sweep): drawn here, landed here, and reported
+  // by this client for its own hero only — see fight/fanTelegraph.ts.
+  // Lazy (CLAUDE.md rule 2): the arena is in the boot chunk, the decals need not be.
+  let fans: FanTelegraphs | null = null;
+  if (!headless) void import("./fanTelegraph").then((m) => (fans = m.createFanTelegraphs(scene)));
+  const BOSS_FLOOR = new Vector3(0, 0, 0);
+
   const hooks: FightHooks = {
     conditioningChanged: (s) => onConditioning?.(s),
     operantChanged: (s) => onOperant?.(s),
@@ -449,6 +458,19 @@ export async function setupArenaCombat(
     bossStrike: (targets) => {
       playSfx(targets === "all" ? "boss.terror.aoe" : "boss.melee.swing");
       nightmare.strike(targets === "all");
+    },
+    bossFan: (f) => {
+      if (!fans) return;
+      // Aimed once, at where the target stands NOW — it never tracks.
+      const aim = f.targetIsPlayer ? hero.node.position : (teammateChest(f.targetName) ?? hero.node.position);
+      const at = new Vector3(aim.x, 0, aim.z);
+      nightmare.sweep(at, f.wide);
+      playSfx("boss.fan.windup");
+      fans.cast(f, BOSS_FLOOR, at, (inside) => {
+        nightmare.sweep(null, f.wide);
+        playSfx(f.wide ? "boss.fan.land.wide" : "boss.fan.land");
+        if (!heroDead && inside(hero.node.position)) driver.fanHit(f.id);
+      });
     },
     // Sim-only beats → sounds. The sim names the moment, this table names
     // the file — kit sub-events and boss telegraphs share one channel.
@@ -1727,6 +1749,7 @@ export async function setupArenaCombat(
       // Networked teammates (ranked party runs) — reports our pose, then
       // interpolates and updates theirs.
       partyNet?.tick(dt);
+      fans?.tick(dt);
       pet.tick();
       followGoal.copyFrom(hero.node.position);
       followGoal.y += 1.55;

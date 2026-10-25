@@ -41,6 +41,7 @@ import { FOCUS, GCD_MS, focusCostFor } from "../shared/fight/costs.ts";
 import { NEUTRAL_LOADOUT, petSpec, resolveLoadout } from "../shared/progression.ts";
 import { pushTo, droppedOut } from "./social.mjs";
 import { settleFight, noteServerSettled } from "./economy.mjs";
+import { potionMult } from "./coffee.mjs";
 
 /** Fixed sim step. Doc 06's arena tick. */
 const TICK_HZ = 20;
@@ -176,6 +177,8 @@ function makeMember(userId, actorId, hero, username) {
     /** The sim has no Focus pool; this is the cost model the client used to
      *  enforce on itself. */
     focus: FOCUS.max,
+    /** Focus regen multiplier: a Cold Brew from the Coffee Shop, read at fight start. */
+    focusRegen: potionMult(userId, "focus"),
     gcdUntil: 0,
     /** slotId -> ready-at, in sim seconds. */
     cooldowns: new Map(),
@@ -324,6 +327,7 @@ function hooksInto(events, members) {
     announce: (text) => push({ e: "announce", text }),
     setBossPhase: (phase) => push({ e: "phase", phase }),
     bossStrike: (targets) => push({ e: "strike", targets }),
+    bossFan: (fan) => push({ e: "fan", fan }),
     damagePlayer: (n, who) => push({ e: "dmgPlayer", n, who }),
     healPlayer: (n, who) => push({ e: "healPlayer", n, who }),
     combatantDamaged: (name, amount, isPlayer, who) =>
@@ -361,7 +365,7 @@ function hooksInto(events, members) {
 // Intents — the only thing a client is allowed to say
 // ---------------------------------------------------------------------------
 
-const KINDS = new Set(["basic", "palette", "defense", "chain", "ultimate", "stance", "model"]);
+const KINDS = new Set(["basic", "palette", "defense", "chain", "ultimate", "stance", "model", "fan"]);
 
 /**
  * Latency grace on the cast timers, in seconds.
@@ -403,6 +407,12 @@ function applyIntent(session, member, body) {
   if (kind === "stance") {
     fight.setThreatStanceAs(member.actorId, !!body.on);
     return { ok: true, stance: fight.threatStanceActiveFor(member.actorId) };
+  }
+  // "I was standing in fan N when it landed." The sim checks the fan is live
+  // and counts each hero once; where the hero stood is the client's word (the
+  // server has no positions — the same trust as the arena's movement).
+  if (kind === "fan") {
+    return { ok: fight.fanHitAs(member.actorId, Number(body.fan)) };
   }
   // Bandura's model pin: free and off-GCD like the stance — attention is not a cast.
   if (kind === "model") {
@@ -776,7 +786,7 @@ function tickAll() {
 
       // Focus regen and the beat clock, both of which the client used to own.
       for (const member of session.members.values()) {
-        member.focus = Math.min(FOCUS.max, member.focus + FOCUS.regenPerS * dt);
+        member.focus = Math.min(FOCUS.max, member.focus + FOCUS.regenPerS * member.focusRegen * dt);
         const beats = member.hero.beats;
         if (beats && beats.length > 0) {
           member.beatT += dt;

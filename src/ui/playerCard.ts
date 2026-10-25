@@ -1,7 +1,9 @@
 /**
  * Player card — tap another player's avatar in the village and this pops up:
  * who they are (public profile fields from GET /api/social/player) plus the
- * two social verbs that make a plaza a place: Add Friend and Whisper.
+ * social verbs that make a plaza a place: Invite to Party, Add Friend and
+ * Whisper. Invite needs no friendship and no room: POST /api/rooms/invite
+ * makes a private party room for you if you're not in one.
  *
  * Same modal recipe as confirmDialog (DOM overlay, backdrop tap closes,
  * Escape closes) but non-blocking and singleton: tapping another player while
@@ -63,6 +65,7 @@ const CSS = `
 #player-card .plain { ${WOW_BTN} padding: 6px 10px; letter-spacing: .12em; }
 #player-card .plain:hover { ${WOW_BTN_HOVER} }
 #player-card button:disabled { opacity: .55; pointer-events: none; }
+#player-card .invite { width: 100%; min-height: 36px; }
 #player-card .note { font-size: 11.5px; color: ${WOW_TEXT_DIM}; min-height: 1em; }
 `;
 
@@ -245,6 +248,36 @@ function render(card: HTMLElement, info: PlayerInfo, close: () => void): void {
       chat?.openDm(info.username);
     });
     btns.append(whisper);
+
+    // Its own full-width row: four verbs side by side don't fit a phone card.
+    const invite = document.createElement("button");
+    invite.type = "button";
+    invite.className = "cta invite";
+    invite.textContent = "Invite to Party";
+    invite.addEventListener("click", () => {
+      invite.disabled = true;
+      void fetch("/api/rooms/invite", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: info.username }),
+      })
+        .then(async (res) => {
+          if (res.ok) {
+            invite.textContent = "Invited ✓";
+            note.textContent = "When they join, open Dream Siege and start with your party.";
+            return;
+          }
+          const json = (await res.json().catch(() => ({}))) as { error?: string };
+          invite.disabled = false;
+          note.textContent = json.error ?? "That didn't go through.";
+        })
+        .catch(() => {
+          invite.disabled = false;
+          note.textContent = "Network hiccup — try again.";
+        });
+    });
+    card.append(invite);
   }
 
   const closeBtn = document.createElement("button");

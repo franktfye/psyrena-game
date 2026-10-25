@@ -7,7 +7,7 @@
 
 import { ApiError } from "./economy";
 
-export type PotionEffect = "damage" | "healing";
+export type PotionEffect = "damage" | "healing" | "focus";
 
 export interface CoffeeItem {
   id: string;

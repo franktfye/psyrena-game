@@ -3,7 +3,8 @@
  * village hub. Same zero-dependency stance as economy.mjs, same sqlite file.
  *
  * The shop sells timed personal buffs ("potions"): drink a Latte and your
- * damage rides +20% for 24 hours, an Americano does the same for healing.
+ * damage rides +20% for 24 hours, an Americano does the same for healing,
+ * and a Cold Brew refills Focus 25% faster.
  * Only the S sizes are purchasable — M/L are catalogued so the storefront can
  * gray them out as coming-soon, and the server refuses them outright. There
  * is deliberately NO dock button for any of this: the attendant is the door.
@@ -21,8 +22,10 @@ import { logEvent } from "./events.mjs";
 const POTION_DURATION_MS = 24 * 3600 * 1000;
 
 /**
- * The catalogue. `effect` is the multiplier the client sim applies
- * ("damage" | "healing", +magnitude while active). `available: false` rows
+ * The catalogue. `effect` is the multiplier applied while active
+ * ("damage" | "healing" | "focus", +magnitude): damage and healing by the
+ * client sim, Focus regen by whoever runs the Focus pool (the client, or
+ * server/fight.mjs in a server fight — `potionMult` below). `available: false` rows
  * are the M/L teasers: rendered grayed in the storefront, refused here.
  */
 export const COFFEE_ITEMS = [
@@ -34,12 +37,17 @@ export const COFFEE_ITEMS = [
     desc: "+20% healing for 24 h" },
   { id: "americano_m", name: "Americano", size: "M", price: null, effect: "healing", magnitude: 0,   available: false, desc: "Coming soon" },
   { id: "americano_l", name: "Americano", size: "L", price: null, effect: "healing", magnitude: 0,   available: false, desc: "Coming soon" },
+  { id: "coldbrew_s",  name: "Cold Brew", size: "S", price: 500,  effect: "focus",   magnitude: 0.25, available: true,
+    desc: "+25% Focus regen for 24 h" },
+  { id: "coldbrew_m",  name: "Cold Brew", size: "M", price: null, effect: "focus",   magnitude: 0,   available: false, desc: "Coming soon" },
+  { id: "coldbrew_l",  name: "Cold Brew", size: "L", price: null, effect: "focus",   magnitude: 0,   available: false, desc: "Coming soon" },
 ];
 
 /** Buff presentation, keyed by effect — name/icon the HUD tile and card wear. */
 const EFFECT_BUFFS = {
   damage:  { name: "Espresso Veins", icon: "/assets/ui/buffs/espresso_veins.webp" },
   healing: { name: "Steady Hands",   icon: "/assets/ui/buffs/steady_hands.webp" },
+  focus:   { name: "Cold Clarity",   icon: "/assets/ui/buffs/cold_clarity.webp" },
 };
 
 let db = null;
@@ -100,6 +108,13 @@ export function activePotions(userId) {
       expiresAt: Number(r.expires_at),
       ...EFFECT_BUFFS[r.effect],
     }));
+}
+
+/** Multiplier for one effect right now: 1 with nothing active (server fights read Focus regen here). */
+export function potionMult(userId, effect) {
+  return activePotions(userId)
+    .filter((p) => p.effect === effect)
+    .reduce((m, p) => m * (1 + p.magnitude), 1);
 }
 
 function balanceFor(userId) {

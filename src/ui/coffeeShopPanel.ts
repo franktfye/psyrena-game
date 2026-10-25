@@ -4,7 +4,8 @@
  * button: the barista is the door, per the facility's design.
  *
  * The menu sells timed potion buffs (server/coffee.mjs is the ledger): the S
- * Latte (+20% damage / 24 h) and S Americano (+20% healing / 24 h). The M and
+ * Latte (+20% damage / 24 h), S Americano (+20% healing / 24 h) and S Cold
+ * Brew (+25% Focus regen / 24 h). The M and
  * L sizes are catalogued but not brewing yet — rendered grayed, refused by
  * the server. Below the menu sits the Redeem Code row, the future hook for
  * special items; today every code is politely refused by the server stub.
@@ -34,12 +35,14 @@ import {
 const ITEM_ICONS: Record<string, string> = {
   Latte: "/assets/ui/coffee/latte.webp",
   Americano: "/assets/ui/coffee/americano.webp",
+  "Cold Brew": "/assets/ui/coffee/coldbrew.webp",
 };
 
 /** Accent per effect — the same reads as the buff tiles they grant. */
 const EFFECT_COLOR: Record<string, string> = {
   damage: "#ff9a5c",
   healing: "#6fdc8f",
+  focus: "#6fb8ff",
 };
 
 const CSS = `

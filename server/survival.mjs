@@ -19,7 +19,7 @@ import { SurvivalSim, HERO_HP } from "../shared/survival/sim.ts";
 import { OLD_KOWLOON } from "../shared/survival/map/oldKowloon.ts";
 import { DIFFICULTIES } from "../shared/survival/content.ts";
 import { heroById } from "../shared/heroes/index.ts";
-import { pushTo } from "./social.mjs";
+import { pushTo, droppedOut } from "./social.mjs";
 import { settleSurvival } from "./economy.mjs";
 import { loadoutFor } from "./fight.mjs";
 
@@ -60,19 +60,25 @@ function sessionOf(userId) {
   return null;
 }
 
-function startSession(roomId, difficulty) {
-  const members = db.prepare("SELECT user_id FROM room_members WHERE room_id = ?").all(roomId).map((m) => Number(m.user_id));
+/** A party room's members, for a party launch. */
+function roomMembers(roomId) {
+  return db.prepare("SELECT user_id FROM room_members WHERE room_id = ?").all(roomId).map((m) => Number(m.user_id));
+}
+
+/** Start a run for these players (a party room, or a team the queue just formed). */
+function startSession(members, difficulty) {
+  for (const uid of members) dequeue(uid);
   const players = members.map((uid) => {
     const row = db.prepare("SELECT selected_hero FROM game_state WHERE user_id = ?").get(uid);
     const hero = heroById(row?.selected_hero);
     const u = db.prepare("SELECT username FROM users WHERE id = ?").get(uid);
     return { id: String(uid), hero: hero.id, role: hero.role, name: u?.username ?? `player ${uid}` };
   });
-  const sim = new SurvivalSim({ difficulty, map: OLD_KOWLOON, players, seed: (Date.now() & 0xffff) ^ roomId });
+  const sim = new SurvivalSim({ difficulty, map: OLD_KOWLOON, players, seed: (Date.now() & 0xffff) ^ (members[0] ?? 0) });
   const id = nextId++;
   const now = Date.now();
   const s = {
-    id, roomId, difficulty, members, sim, ended: false, tickN: 0, events: [],
+    id, difficulty, members, sim, ended: false, tickN: 0, events: [],
     lastInput: new Map(members.map((m) => [m, now])),
     /** Members whose client has sent at least one input (loaded the run). */
     ready: new Set(), startedAt: now, running: false,
@@ -226,6 +232,93 @@ function applyInput(s, uid, body) {
   if (typeof body.boon === "string") sim.pickBoon(id, body.boon);
 }
 
+// ---------------------------------------------------------------------------
+// Dream Siege queue — its own matchmaking, separate from the Boss Queue.
+//
+// An entry is a solo player or a whole party (queued by its leader), at one
+// difficulty. The matchmaker fills teams of 3 first-come-first-served; a team
+// of 2 goes once its oldest entry has waited PAIR_AFTER_MS, because a duo now
+// beats a trio in two minutes. In memory: a restart empties the queue, and
+// the panel's poll shows that as "not queued".
+// ---------------------------------------------------------------------------
+
+const TEAM_MAX = 3;
+const PAIR_AFTER_MS = 20_000;
+const QUEUE_STALE_MS = 15 * 60_000;
+/** key -> { members: number[], difficulty, at } — key is the leader's (or solo player's) id. */
+const queue = new Map();
+
+function entryOf(userId) {
+  const id = Number(userId);
+  for (const [key, e] of queue) if (e.members.includes(id)) return [key, e];
+  return null;
+}
+
+function dequeue(userId) {
+  const hit = entryOf(userId);
+  if (hit) queue.delete(hit[0]);
+}
+
+/** Pick entries (oldest first) whose sizes add up to exactly `size`, or null. */
+function pickTeam(entries, size) {
+  const out = [];
+  const walk = (i, left) => {
+    if (left === 0) return true;
+    for (let j = i; j < entries.length; j++) {
+      if (entries[j].members.length > left) continue;
+      out.push(entries[j]);
+      if (walk(j + 1, left - entries[j].members.length)) return true;
+      out.pop();
+    }
+    return false;
+  };
+  return walk(0, size) ? [...out] : null;
+}
+
+function matchmake() {
+  const now = Date.now();
+  for (const [key, e] of queue) {
+    // A tab that closed (past the drop grace) or a queue left overnight leaves.
+    if (now - e.at > QUEUE_STALE_MS || e.members.some((uid) => droppedOut(uid) || sessionOf(uid))) queue.delete(key);
+  }
+  for (const difficulty of Object.keys(DIFFICULTIES)) {
+    for (;;) {
+      const pool = [...queue.values()].filter((e) => e.difficulty === difficulty).sort((a, b) => a.at - b.at);
+      const waiting = pool.reduce((n, e) => n + e.members.length, 0);
+      if (waiting < 2) break;
+      let team = pickTeam(pool, TEAM_MAX);
+      if (!team && now - pool[0].at >= PAIR_AFTER_MS) team = pickTeam(pool, 2);
+      if (!team) break;
+      const members = team.flatMap((e) => e.members);
+      const s = startSession(members, difficulty);
+      for (const uid of s.members) pushTo(uid, "survivalLaunch", { session: s.id, difficulty: s.difficulty, members: s.members.map(String) });
+    }
+  }
+}
+setInterval(matchmake, 2000).unref?.();
+
+/** The leader's party (2–3, not a matchmade boss lobby), or null. */
+function partyOf(userId) {
+  const room = db
+    .prepare("SELECT r.id, r.host_id, r.matchmade FROM rooms r JOIN room_members m ON m.room_id = r.id WHERE m.user_id = ?")
+    .get(userId);
+  if (!room || room.matchmade) return null;
+  const members = roomMembers(Number(room.id));
+  return members.length >= 2 ? { id: Number(room.id), hostId: Number(room.host_id), members } : null;
+}
+
+function queueStatus(userId) {
+  const hit = entryOf(userId);
+  const e = hit?.[1];
+  const waitingAt = (d) => [...queue.values()].filter((q) => q.difficulty === d).reduce((n, q) => n + q.members.length, 0);
+  return {
+    queued: !!e,
+    difficulty: e?.difficulty ?? null,
+    since: e ? e.at : null,
+    waiting: Object.fromEntries(Object.keys(DIFFICULTIES).map((d) => [d, waitingAt(d)])),
+  };
+}
+
 export async function handleSurvival(req, res, url, userId) {
   const { send, readBody } = helpers;
   // Every survival route acts as a player; the dispatcher leaves the login check
@@ -242,9 +335,27 @@ export async function handleSurvival(req, res, url, userId) {
     if (count < 2) return send(res, 400, { error: "A party run needs at least two players." });
     const existing = sessionOf(userId);
     if (existing) return send(res, 409, { error: "Your party is already in a Dream Siege." });
-    const s = startSession(Number(room.id), body.difficulty);
+    const s = startSession(roomMembers(Number(room.id)), body.difficulty);
     for (const uid of s.members) pushTo(uid, "survivalLaunch", { session: s.id, difficulty: s.difficulty, members: s.members.map(String) });
     return send(res, 200, { session: s.id });
+  }
+  if (route === "GET /api/survival/queue") return send(res, 200, queueStatus(userId));
+  if (route === "POST /api/survival/queue/join") {
+    const body = await readBody(req);
+    if (!DIFFICULTIES[body?.difficulty]) return send(res, 400, { error: "difficulty must be lucid | deep | terror." });
+    if (sessionOf(userId)) return send(res, 409, { error: "You are already in a Dream Siege." });
+    const party = partyOf(userId);
+    if (party && party.hostId !== Number(userId)) return send(res, 403, { error: "Your party leader queues for the party." });
+    if (party && party.members.length >= TEAM_MAX) return send(res, 409, { error: "Your party is full — start it instead." });
+    const members = party ? party.members : [Number(userId)];
+    for (const uid of members) dequeue(uid);
+    queue.set(Number(userId), { members, difficulty: body.difficulty, at: Date.now() });
+    matchmake();
+    return send(res, 200, queueStatus(userId));
+  }
+  if (route === "POST /api/survival/queue/leave") {
+    dequeue(userId);
+    return send(res, 200, queueStatus(userId));
   }
   if (route === "POST /api/survival/input") {
     const body = await readBody(req);
