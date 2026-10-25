@@ -73,7 +73,7 @@ export const HERO_WALK = 3.4;
 export const MINION_HIT = { pct: 0.02, windup: 0.35, cooldown: 1.4, reach: 1.3 };
 export const ELITE_HIT = { pct: 0.06, windup: 0.6, cooldown: 1.8, reach: 1.8 };
 
-export type HeroKitId = "freud" | "pavlov" | "skinner" | "erikson" | "ainsworth";
+export type HeroKitId = "freud" | "pavlov" | "skinner" | "erikson" | "ainsworth" | "piaget" | "bandura";
 
 export interface EliteDef {
   id: string;
@@ -95,7 +95,51 @@ export const ELITES: EliteDef[] = [
   { id: "pigeon", name: "Superstitious Pigeon", hero: "skinner", model: "sv-superstitious-pigeon", speed: 2.2, debuffName: "Extinguished", debuffMs: 10000, vuln: 0.25, theory: "Reward at random and the pigeon invents a ritual (Skinner, 1948). Staddon & Simmelhag (1971) reread it as instinct." },
   { id: "diffusion", name: "Identity Diffusion", hero: "erikson", model: "sv-identity-diffusion", speed: 2.2, debuffName: "Committed", debuffMs: 10000, vuln: 0.25, theory: "Diffusion: no commitment, no exploration. Achievement: both (Marcia, 1966, after Erikson)." },
   { id: "wraith", name: "Clinging Wraith", hero: "ainsworth", model: "sv-clinging-wraith", speed: 2.2, debuffName: "Reunited", debuffMs: 8000, vuln: 0.15, theory: "Separation distress and the reunion: the Strange Situation (Ainsworth et al., 1978)." },
+  { id: "imitator", name: "The Imitator", hero: "bandura", model: "sv-imitator", speed: 2.2, debuffName: "Deterred", debuffMs: 8000, vuln: 0.25, theory: "Children who watched an adult beat a Bobo doll beat it too, new moves included (Bandura, Ross & Ross, 1961). Seeing the model punished cut the copying (Bandura, 1965)." },
+  { id: "tallglass", name: "The Tall Glass", hero: "piaget", model: "sv-tall-glass", speed: 2.0, debuffName: "Conserved", debuffMs: 10000, vuln: 0.25, theory: "Pour the same water into a taller glass and a young child says there is more now. Around 7, children see the amount is conserved (Piaget & Szeminska, 1941)." },
 ];
+
+/**
+ * The Imitator (Bandura's elite): observational learning turned on the party.
+ * ATTENTION: it watches whoever hurts it most. RETENTION: it remembers the
+ * last `slots` different skills that hit it. REPRODUCTION: every `everyS` it
+ * plays the oldest back as a telegraph shaped by the skill's kind. MOTIVATION:
+ * a copy of a crit (a rewarded model) hits harder. Teach it something small.
+ */
+export const IMITATOR_RULES = {
+  slots: 3,
+  everyS: 6,
+  /** A rewarded original (it crit) is reproduced this much harder: vicarious reinforcement. */
+  motivatedMult: 1.3,
+  /** Per kind of copied skill: the telegraph it becomes. */
+  copy: {
+    basic: { shape: "line", r: 0.9, len: 9, t: 0.9, pct: 0.09 },
+    palette: { shape: "atTarget", r: 2.4, t: 1.1, pct: 0.1 },
+    defense: { shape: "atTarget", r: 2.0, t: 1.1, pct: 0.07 },
+    chain: { shape: "self", r: 4.6, t: 1.3, pct: 0.1 },
+    ultimate: { shape: "atTarget", r: 3.6, t: 1.5, pct: 0.17 },
+  },
+  /** Deterred: half speed, no copies, memory wiped. Bandura's reproductions on it add time. */
+  deterredMoveMult: 0.5,
+  reproductionExtendS: 1,
+  maxExtendS: 4,
+} as const;
+
+/**
+ * The Tall Glass (Piaget's elite): it pours itself between TALL (fast, long
+ * reach, hard hits: it looks like more) and WIDE (slow, spills burning ground
+ * as it walks), splashing on each pour. The amount never changes: its HP is
+ * the same in both, which is the whole lesson.
+ */
+export const TALL_GLASS_RULES = {
+  pourEveryS: 7,
+  splash: { r: 3.2, t: 1.0, pct: 0.09 },
+  tall: { speedMult: 1.35, hitMult: 1.5, reachMult: 1.6 },
+  wide: { speedMult: 0.6, spillEveryS: 1.4, spillR: 1.3, spillS: 5, spillPctPerS: 0.04 },
+  /** Sensorimotor → Preoperational → Concrete, in order, before the Concrete that conserves it. */
+  sequenceWindowS: 9,
+  sequenceBonusS: 5,
+} as const;
 
 /**
  * Elite rules (§4.2): Defended −60 % until debuffed; Wanes after 40 s. 12× a
@@ -164,6 +208,8 @@ export const QUIZ: QuizItem[] = [
   { id: "q_id", source: "repressed", question: "Which part of the mind wants pleasure right now?", answers: ["Id", "Ego", "Superego", "Persona"], explain: "The id runs on the pleasure principle; the ego plans, the superego judges." },
   { id: "q_rem", source: "wisp", question: "Which sleep stage has the most vivid dreams?", answers: ["REM sleep", "Deep sleep", "Stage 1", "Stage 2"], explain: "REM = rapid eye movement, the most dream-rich stage." },
   { id: "q_identity", source: "diffusion", question: "Erikson: the big question of the teenage years?", answers: ["Identity", "Trust", "Intimacy", "Integrity"], explain: "Teens work out who they are: identity vs role confusion." },
+  { id: "q_bobo", source: "imitator", question: "Kids watch an adult hit a Bobo doll, then hit it too. This is…", answers: ["Observational learning", "Classical conditioning", "Imprinting", "Habituation"], explain: "We learn by watching a model, no reward needed (Bandura, 1961)." },
+  { id: "q_conserve", source: "tallglass", question: "Same water, taller glass. A child who knows it is the same amount understands…", answers: ["Conservation", "Object permanence", "Egocentrism", "Animism"], explain: "Conservation arrives in Piaget's concrete operational stage, around age 7." },
   { id: "q_secure", source: "wraith", question: "Baby cries when mom leaves, calms when she returns:", answers: ["Secure", "Avoidant", "Ambivalent", "Disorganized"], explain: "Secure babies use the parent as a safe base (Ainsworth)." },
   { id: "q_illusion", source: "kanizsa", question: "Two equal lines look unequal. What is this?", answers: ["An illusion", "A hallucination", "A dream", "A memory"], explain: "An illusion misreads something real; a hallucination has nothing there." },
   { id: "q_falsemem", source: "falsememory", question: "Remembering something that never happened is a…", answers: ["False memory", "Flashbulb memory", "Reflex", "Habit"], explain: "Memories can be changed by later suggestion (Loftus)." },

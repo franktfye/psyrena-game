@@ -43,6 +43,7 @@ const HEIGHT: Record<string, number> = {
   "sv-dream-wisp": 1.3, "sv-falling-dream": 1.8, "sv-afterimage": 1.85, "sv-kanizsa-pacman": 1.5,
   "sv-false-memory": 1.8, "sv-ebbinghaus-fade": 1.9, "sv-stroop-sprite": 1.3, "sv-bandwagon": 1.75,
   "sv-repressed": 2.5, "sv-startle-hound": 2.3, "sv-superstitious-pigeon": 2.4, "sv-identity-diffusion": 2.4, "sv-clinging-wraith": 2.4,
+  "sv-imitator": 2.3, "sv-tall-glass": 2.6,
   "sv-dream-weaver": 5.0, "sv-ames-room": 5.2, "sv-invisible-gorilla": 4.4, "sv-old-hag": 4.6,
 };
 const AGE_LABEL: Record<string, string> = {
@@ -56,6 +57,10 @@ interface Body {
   playing: string;
   ring: Mesh | null;
   tag: Mesh | null;
+  /** The Imitator's "next copy" tag, and the text it shows now. */
+  copyTag?: { mesh: Mesh; tex: DynamicTexture; text: string };
+  /** Tall Glass: the pour shape, eased (−1 wide … 0 itself … +1 tall). */
+  pour?: number;
   /** Violet sigil under a monster while a hero's damage-over-time rides it. */
   dotMark?: Mesh | null;
   lastX: number;
@@ -363,6 +368,33 @@ export function createSurvivalView(scene: Scene, sim: SurvivalSim): SurvivalView
     }
   }
 
+  /** The Imitator wears what it learned: "NEXT: <skill>", or "watching…" until it has seen one. */
+  function copyTag(b: Body, h: Hostile): void {
+    const text = h.copyNext ? `NEXT: ${h.copyNext}` : (h.debuffUntil ?? 0) > sim.t ? "" : "watching…";
+    if (!b.copyTag) {
+      const tex = new DynamicTexture(`sv_copytex_${h.id}`, { width: 512, height: 64 }, scene, false);
+      tex.hasAlpha = true;
+      const mat = new StandardMaterial(`sv_copymat_${h.id}`, scene);
+      mat.diffuseTexture = tex;
+      mat.emissiveColor = new Color3(1, 1, 1);
+      mat.disableLighting = true;
+      mat.useAlphaFromDiffuseTexture = true;
+      const mesh = MeshBuilder.CreatePlane(`sv_copytag_${h.id}`, { width: 3.2, height: 0.4 }, scene);
+      mesh.material = mat;
+      mesh.billboardMode = TransformNode.BILLBOARDMODE_ALL;
+      mesh.position.y = (HEIGHT[h.model] ?? 2.4) + 0.4;
+      mesh.parent = b.root;
+      mesh.isPickable = false;
+      b.copyTag = { mesh, tex, text: "\u0000" };
+    }
+    if (b.copyTag.text === text) return;
+    b.copyTag.text = text;
+    const ctx = b.copyTag.tex.getContext();
+    ctx.clearRect(0, 0, 512, 64);
+    b.copyTag.tex.drawText(text, null, 44, "bold 30px Georgia", h.copyNext ? "#ffb36b" : "#c9b8e8", "transparent", true);
+    b.copyTag.mesh.setEnabled(text !== "");
+  }
+
   function syncHostiles(dt: number): void {
     const seen = new Set<number>();
     for (const h of sim.hostiles) {
@@ -393,6 +425,16 @@ export function createSurvivalView(scene: Scene, sim: SurvivalSim): SurvivalView
       else if (moved > 0.3) play(b, "walk", true);
       else play(b, "idle", true);
       if (h.kind === "elite") eliteDressing(b, h);
+      if (h.def === "imitator") copyTag(b, h);
+      if (h.def === "tallglass") {
+        // Same amount, different glass: tall and thin or squat and wide, the volume
+        // kept (x·y·z = 1), which is the lesson.
+        const goal = h.form === "tall" ? 1 : h.form === "wide" ? -1 : 0;
+        b.pour = (b.pour ?? 1) + (goal - (b.pour ?? 1)) * Math.min(1, dt * 5);
+        const k = b.pour;
+        const sy = k >= 0 ? 1 + 0.25 * k : 1 + 0.28 * k;
+        b.root.scaling.set(1 / Math.sqrt(sy), sy, 1 / Math.sqrt(sy));
+      }
       const dotted = !!(h.dots?.length || h.dotted);
       if (dotted && !b.dotMark) {
         const m = MeshBuilder.CreatePlane(`sv_dot_${h.id}`, { size: 1.5 }, scene);
@@ -783,10 +825,13 @@ export function createSurvivalView(scene: Scene, sim: SurvivalSim): SurvivalView
       }
       pickModels.hp = hp;
       pickModels.focus = focus;
-      const heroes = new Set(sim.players.map((p) => p.hero));
+      // A hero with no elite of their own (Piaget, Bandura) draws a random one
+      // (sim.spawnElite), so then every elite can show up and all must load.
+      const heroes = new Set<string>(sim.players.map((p) => p.hero));
+      const ownOnly = [...heroes].every((h) => ELITES.some((e) => e.hero === h));
       const models = [
         ...MINIONS.map((m) => m.model),
-        ...ELITES.filter((e) => heroes.has(e.hero)).map((e) => e.model),
+        ...ELITES.filter((e) => !ownOnly || heroes.has(e.hero)).map((e) => e.model),
         ...BOSSES.map((b) => b.model),
       ];
       await Promise.all(models.map(async (m) => ready.set(m, await container(m))));
