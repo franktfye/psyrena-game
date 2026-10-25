@@ -39,7 +39,7 @@ import {
   type MatchFormat,
 } from "../combat.ts";
 import type { BossFightScript, FightPhaseId, SimAllySpec } from "../bosses/nightmare.ts";
-import type { Hero, OverTime } from "../types.ts";
+import type { Effect, Hero, OverTime } from "../types.ts";
 import {
   castAddon,
   castLifeStage,
@@ -163,6 +163,12 @@ export interface FightHooks {
    * stage and virtue names ARE the lesson, so they must track the sim exactly.
    */
   psychosocialChanged?(state: PsychosocialHudState, actorId?: string): void;
+  /**
+   * Bandura's model or retention slots moved (a copy retained, reproduced or
+   * faded; attention shifted to a new model). The bar relabels keys 1–4 with
+   * the copied skills' names and icons — the copies ARE his kit.
+   */
+  modelingChanged?(state: ModelingHudState, actorId?: string): void;
   /** Hit reaction on the hero model, when one is rigged. */
   playerHitReaction(actorId?: string): void;
   /**
@@ -219,6 +225,25 @@ export interface OperantHudState {
 }
 
 /** One attempt's reckoning, handed to `FightHooks.fightEnd`. */
+/** One retained copy, as the bar shows it (`modelingChanged`). */
+export interface RetainedView {
+  /** The copied skill's id ("freud.stage.oral") — the bar draws ITS icon. */
+  id: string;
+  name: string;
+  /** Hero whose icon set the copy's icon lives in; "boss" for a modeled blow. */
+  heroId: string;
+  /** The original was reinforced: this copy pays the full rate. */
+  motivated: boolean;
+}
+
+export interface ModelingHudState {
+  /** Who Bandura is watching; null = nobody to watch, so he models the boss. */
+  model: { id: string; name: string } | null;
+  /** True when the player picked the model rather than salience. */
+  pinned: boolean;
+  slots: (RetainedView | null)[];
+}
+
 export interface FightEndStats {
   win: boolean;
   durationMs: number;
@@ -586,6 +611,42 @@ interface FightActor {
   styleLog: { id: string; t: number }[];
   /** Per-entry ready time for palette entries with their own `cooldownMs`. */
   paletteReadyAt: Map<string, number>;
+
+  // ---- development effects (Piaget's kit, generic kinds) -------------------
+  /** `shield.team`: absorb pools on THIS actor, spent before HP. */
+  shields: { left: number; until: number; label: string }[];
+  /** `heal.hot`: heal-over-time trains landing on THIS actor. */
+  hots: { perTick: number; left: number; nextAt: number; periodS: number; src: FightActor | null; label: string }[];
+  /** `ally.undying`: HP cannot fall below 1 until then; `undyingHeal` lands after. */
+  undyingUntil: number;
+  undyingHeal: { amount: number; src: FightActor | null; label: string } | null;
+  /** Piaget's invariant sequence: stages cast in order so far, and when. */
+  seqStep: number;
+  seqAt: number;
+
+  // ---- observational learning (Bandura, `Hero.modeling`) -------------------
+  /** How noticeable this actor is as a model — decays, see `salienceOf`. */
+  salience: number;
+  salienceAt: number;
+  /** Retention slots (Bandura only; empty for everyone else). */
+  retained: (RetainedSkill | null)[];
+  /** A model the player picked (party frame tap); null = salience decides. */
+  modelPin: string | null;
+  /** Last model reported to the HUD, so attention shifts are announced once. */
+  modelSeen: string | null;
+  /** simT of this actor's last RESOLVED ultimate — see `ultimateResolvedAs`. */
+  lastUltAt: number;
+  /** Next once-a-second attention re-check (Bandura). */
+  attentionAt: number;
+}
+
+/** A skill Bandura has watched and kept, ready to reproduce. */
+interface RetainedSkill {
+  view: RetainedView;
+  effects: readonly Effect[];
+  /** The original healed rather than hit: the copy heals for his base. */
+  heals: boolean;
+  until: number;
 }
 
 interface MarkInstance {
@@ -599,6 +660,27 @@ interface DebuffInstance {
 /** P2 form names — the doll order in nightmareBoss.ts, as age words. The
  *  design rule (doc 04) is that cues never name the palette answer outright. */
 const P2_FORMS = ["an infant", "a toddler", "a child", "a schoolchild", "an adolescent"] as const;
+
+/** The answer tag of each P2 form, same order — `PaletteEntry.answersTags`. */
+const P2_TAGS = ["age.infant", "age.toddler", "age.child", "age.school", "age.adolescent"] as const;
+
+/**
+ * The plain effect kinds `applySharedEffects` resolves. A defense carrying
+ * any of these pays them as part of its guaranteed floor rather than rolling
+ * them as a Freud-style rider, and they are what Bandura can copy.
+ */
+const SHARED_KINDS = new Set([
+  "mitigation.grant", "taunt", "team.cleanse", "team.amp", "threat.drop", "self.stagger",
+  "heal.cut.self", "team.immunity", "vulnerability",
+  "heal.hot", "heal.single", "conservation", "shield.team", "ally.undying",
+]);
+/**
+ * Healing SHAPES: kinds whose magnitude is the heal itself. A Bandura copy of
+ * one keeps the shape and swaps in his own number (bandura.ts).
+ */
+const HEAL_SHAPE_KINDS = new Set(["heal.hot", "heal.single", "conservation", "shield.team", "ally.undying"]);
+/** Kinds whose magnitude is not an amount (a spread in seconds) — copies leave it. */
+const UNSCALED_MAGNITUDE = new Set(["self.stagger"]);
 
 /** The P2 armor-bypass debuff's display name — announces, DoT floats. */
 const WOUND_NAME = "Shapeshift Wound";
@@ -657,6 +739,15 @@ export class BossFight {
   private tauntActorId: string | null = null;
   private domeUntil = -1; // Extinction dome: boss outgoing × (1 − domeCut)
   private domeCut = 0;
+  /**
+   * Bobo Doll: single-target blows land on the decoy until then; at the end
+   * it rebounds `decoyRebound` of what it absorbed at the boss, credited to
+   * the owner. Where the boss is swinging is boss state, like the taunt.
+   */
+  private decoyUntil = -1;
+  private decoyRebound = 0;
+  private decoyAbsorbed = 0;
+  private decoyOwnerId: string | null = null;
   /** Party wiped — the sim freezes; the arena layer routes back to town. */
   private over = false;
   // Wound-DoT float batching: per-frame ticks are sub-pixel numbers, so the
@@ -740,6 +831,8 @@ export class BossFight {
     for (const a of this.actors) if (a.input) this.emitOperant(a);
     // …and so does a life-cycle kit: stage 1 is up before the first press.
     for (const a of this.actors) if (a.input) this.emitPsychosocial(a);
+    // …and an observational kit: four empty slots and a model to watch.
+    for (const a of this.actors) if (a.input && a.hero?.modeling) this.emitModeling(a, false);
   }
 
   /**
@@ -835,6 +928,19 @@ export class BossFight {
       lastHitAt: -1,
       styleLog: [],
       paletteReadyAt: new Map(),
+      shields: [],
+      hots: [],
+      undyingUntil: -1,
+      undyingHeal: null,
+      seqStep: 0,
+      seqAt: -1,
+      salience: 0,
+      salienceAt: 0,
+      retained: hero?.modeling ? Array.from({ length: hero.modeling.slots }, () => null) : [],
+      modelPin: null,
+      modelSeen: null,
+      lastUltAt: -1,
+      attentionAt: 0,
     };
   }
 
@@ -1059,7 +1165,11 @@ export class BossFight {
       // grants the wound stack and can never Fixate.
       grantsDebuffStack = true;
     } else if (this.phase === "p2" && this.p2Stage >= 0) {
-      const correct = paletteIndex === this.p2Stage;
+      // By position (Freud's five stages are the five forms in order), or by
+      // tag when one button spans several forms (Piaget's Preoperational).
+      const correct = entry.answersTags
+        ? entry.answersTags.includes(P2_TAGS[this.p2Stage] ?? "")
+        : paletteIndex === this.p2Stage;
       if (a.freeAssocLeft > 0 && this.simT < a.freeAssocUntil) {
         a.freeAssocLeft--;
         // Auto-correct: counts as the right answer, but the Mark is halved.
@@ -1096,10 +1206,231 @@ export class BossFight {
       }
     }
 
-    this.applyPaletteEffects(a, entry.effects);
-    const base = this.psychosocialBase(a, entry);
-    const { damage, crit } = this.playerHit(a, base, this.beatOf(a, beat), true);
+    // Bandura's keys hold copies: the slot decides what this cast IS.
+    const repro = entry.effects.some((e) => e.kind === "modeling.reproduce") ? this.reproduce(a, entry) : null;
+    this.applyPaletteEffects(a, repro ? repro.effects : entry.effects);
+    if (a.hero.development) this.advanceSequence(a, paletteIndex);
+    const base = repro ? repro.base : this.psychosocialBase(a, entry);
+    const { damage, crit } = base > 0 ? this.playerHit(a, base, this.beatOf(a, beat), true) : { damage: 0, crit: false };
+    // Watching teammates (Bandura) see the cast — reinforced when it crit or
+    // answered the form right, which is what makes the copy "motivated".
+    this.observe(a, entry, crit || grantsDebuffStack);
     return { ...splitOverTime(damage, entry.overTime), crit, appliesMark, grantsDebuffStack, markCount };
+  }
+
+  /**
+   * Piaget's invariant sequence: stage k counts only right after stage k−1,
+   * inside the step window. The fourth in a row refunds Focus and the run
+   * restarts — the stages cannot be skipped, and the kit pays for knowing it.
+   */
+  private advanceSequence(a: FightActor, paletteIndex: number): void {
+    const dev = a.hero?.development;
+    if (!dev) return;
+    const inTime = a.seqAt >= 0 && this.simT - a.seqAt <= dev.stepWindowMs / 1000;
+    if (paletteIndex === 0) a.seqStep = 1;
+    else if (inTime && paletteIndex === a.seqStep) a.seqStep += 1;
+    else a.seqStep = 0;
+    a.seqAt = this.simT;
+    const stages = a.hero!.palette.length;
+    if (a.seqStep >= stages) {
+      a.seqStep = 0;
+      this.hooks.gainFocus?.(dev.sequenceFocusRefund, a.id);
+      this.hooks.defenseProc?.(`Invariant sequence +${dev.sequenceFocusRefund} Focus`, a.id);
+      this.hooks.playerBuff("Invariant Sequence", 1, "buff", "invariant_sequence", "invariant_sequence", "", a.id);
+      return;
+    }
+    // The run so far, as a tile: which stage comes next is the lesson.
+    const next = a.hero!.palette[a.seqStep]?.name ?? "";
+    this.hooks.playerBuff(
+      a.seqStep > 0 ? `Invariant Sequence ${a.seqStep}/${stages}` : "Invariant Sequence",
+      a.seqStep > 0 ? dev.stepWindowMs : 1,
+      "buff",
+      "invariant_sequence",
+      "invariant_sequence",
+      `Stages come in an order that cannot be skipped. ${a.seqStep}/${stages} in sequence; next: ${next}. All ${stages} in order refunds ${dev.sequenceFocusRefund} Focus.`,
+      a.id
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Observational learning (Bandura)
+  // -------------------------------------------------------------------------
+
+  /** Salience now: banked output, halved every `salienceHalfLifeS`. */
+  private salienceOf(c: FightActor, halfLifeS: number): number {
+    return c.salience * Math.pow(0.5, (this.simT - c.salienceAt) / halfLifeS);
+  }
+
+  /** Output makes a combatant noticeable. Fixed 10 s half-life for the bank. */
+  private noteSalience(c: FightActor, amount: number): void {
+    if (amount <= 0) return;
+    c.salience = this.salienceOf(c, 10) + amount;
+    c.salienceAt = this.simT;
+  }
+
+  /**
+   * ATTENTION: who `b` is watching. A pinned model while they live, else the
+   * most salient living teammate with a kit; null when there is nobody, which
+   * means the boss is the model (the Bobo doll lesson).
+   */
+  private modelOf(b: FightActor): FightActor | null {
+    if (b.modelPin) {
+      const pinned = this.actorBy(b.modelPin);
+      if (pinned && pinned !== b && pinned.alive && pinned.hero) return pinned;
+    }
+    const hl = b.hero?.modeling?.salienceHalfLifeS ?? 10;
+    let best: FightActor | null = null;
+    let bestS = -1;
+    for (const c of this.actors) {
+      if (c === b || !c.alive || !c.hero) continue;
+      const sal = this.salienceOf(c, hl);
+      if (sal > bestS) {
+        best = c;
+        bestS = sal;
+      }
+    }
+    return best;
+  }
+
+  /** Pin (or with null, release) the model a Bandura watches — the party-frame tap. */
+  setModelAs(actorId: string, modelId: string | null): void {
+    const b = this.actorBy(actorId);
+    if (!b?.hero?.modeling) return;
+    b.modelPin = modelId && modelId !== actorId ? modelId : null;
+    this.emitModeling(b);
+  }
+
+  /**
+   * The party-agnostic pin control: automatic → each living teammate in turn
+   * → automatic again. The client never needs teammate ids, so the local
+   * sim and the server answer the same tap the same way.
+   */
+  cycleModelAs(actorId: string): void {
+    const b = this.actorBy(actorId);
+    if (!b?.hero?.modeling) return;
+    const order: (string | null)[] = [null, ...this.actors.filter((c) => c !== b && c.alive && c.hero).map((c) => c.id)];
+    const at = order.indexOf(b.modelPin);
+    this.setModelAs(actorId, order[(at + 1) % order.length] ?? null);
+  }
+
+  modelingFor(actorId: string): ModelingHudState | null {
+    const b = this.actorBy(actorId);
+    return b?.hero?.modeling ? this.modelingState(b) : null;
+  }
+
+  private modelingState(b: FightActor): ModelingHudState {
+    const m = this.modelOf(b);
+    return {
+      model: m ? { id: m.id, name: m.name } : null,
+      pinned: b.modelPin !== null && m?.id === b.modelPin,
+      slots: b.retained.map((r) => (r && r.until > this.simT ? r.view : null)),
+    };
+  }
+
+  /**
+   * `float` false paints the HUD without the "Watching X" float — the
+   * constructor's first paint, which runs before the scene's hooks are fully
+   * wired (a float there reaches the damage-number layer mid-construction).
+   */
+  private emitModeling(b: FightActor, float = true): void {
+    const state = this.modelingState(b);
+    const seen = state.model?.id ?? "boss";
+    if (seen !== b.modelSeen) {
+      b.modelSeen = seen;
+      if (float) this.hooks.defenseProc?.(state.model ? `Watching ${state.model.name}` : `Watching ${this.script.displayName}`, b.id);
+    }
+    this.hooks.modelingChanged?.(state, b.id);
+  }
+
+  /**
+   * RETENTION: every watching Bandura whose model is `caster` keeps the cast.
+   * A skill already held is refreshed in place; a new one takes the first
+   * empty slot, else replaces the oldest copy.
+   */
+  private observe(
+    caster: FightActor,
+    ability: { id: string; name: string; base: number; heal?: number; effects: readonly Effect[] },
+    rewarded: boolean
+  ): void {
+    for (const b of this.actors) {
+      const ms = b.hero?.modeling;
+      if (!ms || b === caster || !b.alive || this.modelOf(b) !== caster) continue;
+      const heals =
+        (ability.heal ?? 0) > 0 ||
+        (ability.base <= 0 && ability.effects.some((e) => HEAL_SHAPE_KINDS.has(e.kind) || e.kind.startsWith("schedule.")));
+      this.retain(b, ms, {
+        view: { id: ability.id, name: ability.name, heroId: caster.hero?.id ?? "boss", motivated: rewarded },
+        effects: ability.effects.filter((e) => SHARED_KINDS.has(e.kind)),
+        heals,
+        until: this.simT + ms.retentionMs / 1000,
+      });
+    }
+  }
+
+  private retain(b: FightActor, ms: NonNullable<Hero["modeling"]>, copy: RetainedSkill): void {
+    const live = (r: RetainedSkill | null): r is RetainedSkill => r !== null && r.until > this.simT;
+    let at = b.retained.findIndex((r) => live(r) && r.view.id === copy.view.id);
+    if (at < 0) at = b.retained.findIndex((r) => !live(r));
+    if (at < 0) {
+      at = 0;
+      for (let i = 1; i < b.retained.length; i++) if (b.retained[i]!.until < b.retained[at]!.until) at = i;
+    }
+    b.retained[at] = copy;
+    if (b.retained.length !== ms.slots) b.retained.length = ms.slots;
+    this.emitModeling(b);
+  }
+
+  /**
+   * REPRODUCTION and MOTIVATION: what pressing a slot casts. The copy's
+   * number is ALWAYS Bandura's own base × the motivation rate; only its
+   * effects come from the original (bandura.ts header).
+   */
+  private reproduce(a: FightActor, entry: Hero["palette"][number]): { base: number; effects: Effect[] } {
+    const ms = a.hero!.modeling!;
+    const idx = entry.effects.find((e) => e.kind === "modeling.reproduce")?.magnitude ?? 0;
+    const slot = a.retained[idx];
+    if (!slot || slot.until <= this.simT) {
+      // Rehearsal: an empty slot still swings, at a fraction. Never a dead key.
+      a.retained[idx] = null;
+      this.hooks.defenseProc?.("Rehearsal", a.id);
+      this.emitModeling(a);
+      return { base: entry.base * ms.emptyMult, effects: [] };
+    }
+    a.retained[idx] = null; // reproduced: the slot is spent until the model acts again
+    const mult = slot.view.motivated ? ms.motivatedMult : ms.unmotivatedMult;
+    const amount = entry.base * mult;
+    let hasShape = false;
+    const effects: Effect[] = slot.effects.map((e) => {
+      if (HEAL_SHAPE_KINDS.has(e.kind)) {
+        hasShape = true;
+        return { ...e, magnitude: amount, durationMs: e.durationMs };
+      }
+      return {
+        ...e,
+        magnitude: e.magnitude === undefined || UNSCALED_MAGNITUDE.has(e.kind) ? e.magnitude : e.magnitude * mult,
+        durationMs: e.durationMs === undefined ? undefined : e.durationMs * mult,
+      };
+    });
+    this.hooks.defenseProc?.(`${slot.view.name}${slot.view.motivated ? " — motivated" : ""}`, a.id);
+    if (slot.view.motivated) {
+      this.hooks.playerBuff(
+        "Motivated",
+        1_500,
+        "buff",
+        "motivated",
+        "motivated",
+        "Vicarious reinforcement: your model was rewarded for this, so your copy pays the full rate.",
+        a.id
+      );
+    }
+    this.emitModeling(a);
+    if (slot.heals) {
+      // A copied heal heals for his number: through its own shape if it had
+      // one (a copied Centration is still one target), else across the team.
+      if (!hasShape) this.healParty(a, amount, "team", slot.view.name);
+      return { base: 0, effects };
+    }
+    return { base: amount, effects };
   }
 
   /**
@@ -1163,7 +1494,7 @@ export class BossFight {
    */
   private applySharedEffects(
     a: FightActor,
-    effects: readonly { kind: string; magnitude?: number; durationMs?: number; target?: string }[]
+    effects: readonly Effect[]
   ): void {
     for (const e of effects) {
       const until = this.simT + (e.durationMs ?? 0) / 1000;
@@ -1187,13 +1518,16 @@ export class BossFight {
         // Rides the overheal Amp term (capped at COMBAT.maxAmp with it), so
         // two damage windows can never stack past what overheal already may.
         this.ampEvents.push({ amp: e.magnitude ?? 0, until });
+        const pct = Math.round((e.magnitude ?? 0) * 100);
         this.hooks.playerBuff(
-          `Exploration — team +${Math.round((e.magnitude ?? 0) * 100)}%`,
+          `${e.label ?? "Exploration"} — team +${pct}%`,
           e.durationMs ?? 0,
           "buff",
-          "exploration",
-          "exploration",
-          `A secure base to explore from: the whole team deals +${Math.round((e.magnitude ?? 0) * 100)}% damage for ${secs} s.`,
+          e.icon ?? "exploration",
+          e.icon ?? "exploration",
+          e.label
+            ? `${e.label}: the whole team deals +${pct}% damage for ${secs} s.`
+            : `A secure base to explore from: the whole team deals +${pct}% damage for ${secs} s.`,
           a.id
         );
       } else if (e.kind === "threat.drop") {
@@ -1239,14 +1573,107 @@ export class BossFight {
           );
         }
         if (n > 0) this.hooks.announce(`${a.name} shelters the team — ${secs} s of immunity!`);
+      } else if (e.kind === "vulnerability") {
+        // Boss-side damage-taken term (the P3-armor slot), NOT team Amp —
+        // the sheet's assumed attack buff (pavlov.ts S3).
+        this.vulnUntil = until;
+        this.vulnMagnitude = e.magnitude ?? 0;
+        const pct = Math.round(this.vulnMagnitude * 100);
+        this.hooks.playerBuff(
+          `${e.label ?? "Exposed"} — boss takes +${pct}%`,
+          e.durationMs ?? 0,
+          "buff",
+          e.icon ?? "vulnerability",
+          undefined,
+          `The boss is exposed: it takes +${pct}% damage from the whole team for ${secs} s.`,
+          a.id
+        );
+      } else if (e.kind === "heal.hot") {
+        // Circular Reaction: the most wounded gets the heal in ticks, one a
+        // second. Repeating it on them stacks a second train — infants repeat
+        // what worked, and so may you.
+        const t = this.mostWounded();
+        if (!t) continue;
+        const ticks = Math.max(1, Math.round(secs));
+        t.hots.push({ perTick: (e.magnitude ?? 0) / ticks, left: ticks, nextAt: this.simT + 1, periodS: 1, src: a, label: e.label ?? "Circular Reaction" });
+        this.hooks.playerBuff(
+          "Circular Reaction",
+          e.durationMs ?? 0,
+          "buff",
+          "circular_reaction",
+          "circular_reaction",
+          `Healed ${Math.round(e.magnitude ?? 0)} over ${secs} s, a tick each second. Recast to repeat it: a second train runs alongside.`,
+          t.id
+        );
+      } else if (e.kind === "heal.single") {
+        // Centration: all of it on one teammate, nobody else.
+        const t = this.mostWounded();
+        if (t) this.noteReinforcementHealing(a, this.healCombatant(t, e.magnitude ?? 0, e.label ?? "Centration", a));
+      } else if (e.kind === "conservation") {
+        // Conservation: the team's HP is poured out evenly — the same total,
+        // rearranged — and then the heal lands on top. Nobody can die of it:
+        // the share is the mean, and the mean of the living is above zero.
+        const living = this.actors.filter((c) => c.alive);
+        if (living.length > 1) {
+          const fracMean = living.reduce((sum, c) => sum + c.hp / c.hpMax, 0) / living.length;
+          for (const c of living) c.hp = Math.max(1, Math.min(c.hpMax, fracMean * c.hpMax));
+          for (const c of living) if (c.input) this.hooks.healPlayer(0, c.id); // HP bars repaint
+          this.hooks.defenseProc?.("Conserved", a.id);
+          this.hooks.playerBuff("Conserved", 2_000, "buff", "conserved", "conserved", "Conservation: the team's health was shared out evenly — same total, new shape.", a.id);
+        }
+        this.healParty(a, e.magnitude ?? 0, "team", e.label ?? "Conservation");
+      } else if (e.kind === "shield.team") {
+        // Hypothetical / Accommodation: absorb pools split across the living,
+        // spent before HP. What is left at expiry pays out as Amp, like overheal.
+        const living = this.actors.filter((c) => c.alive);
+        const each = ((e.magnitude ?? 0) * a.potionHeal * a.petHeal) / Math.max(1, living.length);
+        for (const c of living) {
+          c.shields.push({ left: each, until, label: e.label ?? "Shield" });
+          this.hooks.playerBuff(
+            "Shielded",
+            e.durationMs ?? 0,
+            "buff",
+            "hypothetical",
+            "hypothetical",
+            `A shield of ${Math.round(each)} absorbs damage before your health for ${secs} s. Whatever is left when it fades becomes team Amp.`,
+            c.id
+          );
+        }
+      } else if (e.kind === "ally.undying") {
+        // Object Permanence: the teammate is still there even when the bar
+        // says otherwise — no lower than 1 HP for the window, then the heal.
+        const t = this.mostWounded();
+        if (!t) continue;
+        t.undyingUntil = until;
+        t.undyingHeal = { amount: e.magnitude ?? 0, src: a, label: e.label ?? "Object Permanence" };
+        this.hooks.playerBuff(
+          "Object Permanence",
+          e.durationMs ?? 0,
+          "buff",
+          "object_permanence",
+          "object_permanence",
+          `You cannot drop below 1 health for ${secs} s, and then you are healed ${Math.round(e.magnitude ?? 0)}. Still there, even out of sight.`,
+          t.id
+        );
+        this.hooks.announce(`${a.name} holds ${t.name} in mind — Object Permanence!`);
       }
     }
+  }
+
+  /** The living combatant with the lowest HP fraction — where a heal is aimed. */
+  private mostWounded(): FightActor | null {
+    let best: FightActor | null = null;
+    for (const c of this.actors) {
+      if (!c.alive) continue;
+      if (!best || c.hp / c.hpMax < best.hp / best.hpMax) best = c;
+    }
+    return best;
   }
 
   /** Non-damage riders a palette entry carries — UCS's window, CS's consume. */
   private applyPaletteEffects(
     a: FightActor,
-    effects: readonly { kind: string; magnitude?: number; durationMs?: number; target?: string }[]
+    effects: readonly Effect[]
   ): void {
     this.applySharedEffects(a, effects);
     const cond = a.hero?.conditioning;
@@ -1674,7 +2101,7 @@ export class BossFight {
 
     // Plain kinds on a defense are part of the floor too (Safe Haven's
     // cleanse), not a rider to roll for.
-    const floorKinds = new Set(["team.cleanse"]);
+    const floorKinds = SHARED_KINDS;
     this.applySharedEffects(a, ability.effects.filter((e) => floorKinds.has(e.kind)));
 
     // --- the rider: flavour on top, never instead of ------------------------
@@ -1751,6 +2178,7 @@ export class BossFight {
         .join(" "),
       a.id
     );
+    this.observe(a, ability, false);
     return label;
   }
 
@@ -1792,27 +2220,34 @@ export class BossFight {
       );
     }
     // Taunt (Generalization: the boss fixes on the flying clock's owner),
-    // threat drops and the rest of the plain kinds resolve in one place.
-    this.applySharedEffects(a, ability.effects);
+    // threat drops and the rest of the plain kinds resolve in one place. A
+    // chain's vulnerability wears the skill's own name and icon, as it did.
+    this.applySharedEffects(
+      a,
+      ability.effects.map((e) => (e.kind === "vulnerability" ? { label: ability.name, icon: iconSlug(ability.id), ...e } : e))
+    );
     for (const e of ability.effects) {
-      if (e.kind === "vulnerability") {
-        // Boss-side damage-taken term (the P3-armor slot), NOT team Amp —
-        // this is the sheet's assumed attack buff, sourced (pavlov.ts S3).
-        this.vulnUntil = this.simT + (e.durationMs ?? 0) / 1000;
-        this.vulnMagnitude = e.magnitude ?? 0;
+      if (e.kind === "decoy") {
+        // Bobo Doll: the boss's single-target blows land on the doll.
+        this.decoyUntil = this.simT + (e.durationMs ?? 0) / 1000;
+        this.decoyRebound = e.magnitude ?? 0;
+        this.decoyAbsorbed = 0;
+        this.decoyOwnerId = a.id;
         this.hooks.playerBuff(
-          `${ability.name} — boss takes +${Math.round(this.vulnMagnitude * 100)}%`,
+          ability.name,
           e.durationMs ?? 0,
           "buff",
           iconSlug(ability.id),
           undefined,
-          `The boss is exposed: it takes +${Math.round(this.vulnMagnitude * 100)}% damage from the whole team for ${(e.durationMs ?? 0) / 1000} s.`,
+          `The boss beats on the doll instead of your tank for ${(e.durationMs ?? 0) / 1000} s, and the doll rebounds ${Math.round(this.decoyRebound * 100)}% of every blow at it.`,
           a.id
         );
+        this.hooks.announce(`${a.name} sets up the Bobo doll — ${this.script.displayName} cannot resist it!`);
       }
       // "summon.clock" is scene dressing — the arena layer reads the cast.
     }
-    const { damage, crit } = this.playerHit(a, ability.base, this.beatOf(a, beat), true);
+    const { damage, crit } = ability.base > 0 ? this.playerHit(a, ability.base, this.beatOf(a, beat), true) : { damage: 0, crit: false };
+    this.observe(a, ability, crit);
     return {
       ...splitOverTime(damage, ability.overTime),
       crit,
@@ -1841,6 +2276,7 @@ export class BossFight {
     const a = this.actorBy(actorId);
     if (!a?.hero || !this.canAct(a)) return 0;
     const ult = a.hero.ultimate;
+    a.lastUltAt = this.simT;
     // Erikson's Life Review spends HIS virtues; every other ultimate spends
     // the team's Mark board.
     const own = a.psycho ? a.psycho.virtues : this.marks.length;
@@ -1924,6 +2360,13 @@ export class BossFight {
             );
           }
         }
+      } else if (e.kind === "equilibration.release") {
+        // Equilibration: the Marks pay HEALING — every schema Mark spent is
+        // a share of the team heal (the 257 direct share already landed).
+        if (marksConsumed > 0) {
+          this.healParty(a, (e.magnitude ?? 0) * marksConsumed, "team", ult.name);
+          this.hooks.announce(`${a.name} restores equilibrium — ${marksConsumed} schemas settle into a team heal!`);
+        }
       } else if (e.kind === "conditioning.reset") {
         // Presenting the CS without the UCS IS extinction: his own loop is
         // wiped — Pairings, CONDITIONED, the CR — until he rebuilds or E.
@@ -1962,6 +2405,17 @@ export class BossFight {
       );
     }
     return damage;
+  }
+
+  /**
+   * Did `castUltimateAs` just resolve for this actor (this sim tick)? A
+   * healer's ultimate deals 0 damage and still happened — Skinner's Shaping,
+   * Piaget's Equilibration — so "0 damage" alone cannot mean "fizzled". Both
+   * drivers ask this before refusing, or the heal lands with no cooldown.
+   */
+  ultimateResolvedAs(actorId: string): boolean {
+    const a = this.actorBy(actorId);
+    return !!a && a.lastUltAt === this.simT && a.lastUltAt >= 0;
   }
 
   /** The eye reaches the boss: start the tick-by-tick payout of the cast total. */
@@ -2058,6 +2512,19 @@ export class BossFight {
         a.staggerAccum = 0;
         if (a.alive) this.loseHp(a, d, false);
       }
+      this.tickDevelopment(a);
+    }
+    // Bobo Doll pops: it rebounds its share of everything it soaked.
+    if (this.decoyUntil > 0 && this.simT >= this.decoyUntil) {
+      this.decoyUntil = -1;
+      const owner = this.decoyOwnerId ? this.actorBy(this.decoyOwnerId) : null;
+      if (this.decoyAbsorbed > 0 && owner && this.inCombat) {
+        const dealt = this.damageBoss(this.decoyAbsorbed * this.decoyRebound, false);
+        this.addThreat(owner, dealt);
+        this.creditDamageDealt(owner, dealt);
+        this.hooks.dotTick?.("Bobo Doll rebound", dealt, owner.id);
+      }
+      this.decoyAbsorbed = 0;
     }
     this.debuffs = this.debuffs.filter((d) => d.until > this.simT);
     this.ampEvents = this.ampEvents.filter((a) => a.until > this.simT);
@@ -2213,6 +2680,52 @@ export class BossFight {
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
+
+  /**
+   * Per-actor upkeep for the development and modeling kinds: heal-over-time
+   * ticks, shields expiring into Amp, Object Permanence releasing its heal,
+   * and retained copies fading.
+   */
+  private tickDevelopment(a: FightActor): void {
+    if (a.hots.length) {
+      for (const h of a.hots) {
+        while (h.left > 0 && this.simT >= h.nextAt) {
+          if (a.alive) {
+            const healed = this.healCombatant(a, h.perTick, h.label, h.src);
+            if (h.src) this.noteReinforcementHealing(h.src, healed);
+          }
+          h.left -= 1;
+          h.nextAt += h.periodS;
+        }
+      }
+      a.hots = a.hots.filter((h) => h.left > 0);
+    }
+    if (a.shields.length && a.shields.some((sh) => sh.until <= this.simT)) {
+      // An unspent shield is a heal nobody needed: it pays the team as Amp.
+      const spare = a.shields.filter((sh) => sh.until <= this.simT).reduce((sum, sh) => sum + sh.left, 0);
+      a.shields = a.shields.filter((sh) => sh.until > this.simT);
+      if (spare > 0 && this.inCombat) this.ampEvents.push({ amp: overhealToAmp(spare, this.format), until: this.simT + 5 });
+    }
+    if (a.undyingHeal && this.simT >= a.undyingUntil) {
+      const h = a.undyingHeal;
+      a.undyingHeal = null;
+      if (a.alive) {
+        const healed = this.healCombatant(a, h.amount, h.label, h.src);
+        if (h.src) this.noteReinforcementHealing(h.src, healed);
+      }
+    }
+    if (a.hero?.modeling && a.retained.some((r) => r !== null && r.until <= this.simT)) {
+      a.retained = a.retained.map((r) => (r && r.until <= this.simT ? null : r));
+      this.emitModeling(a);
+    }
+    // Attention can drift to a new model without anyone casting: re-check
+    // once a second and repaint only on a change.
+    if (a.hero?.modeling && this.simT >= a.attentionAt) {
+      a.attentionAt = this.simT + 1;
+      const seen = this.modelOf(a)?.id ?? "boss";
+      if (seen !== a.modelSeen) this.emitModeling(a);
+    }
+  }
 
   private get inCombat(): boolean {
     return this.phase !== "idle" && this.phase !== "dead" && this.hp > 0 && !this.over;
@@ -2390,6 +2903,7 @@ export class BossFight {
   private addThreat(who: FightActor, damageDealt: number): void {
     who.threat += damageDealt * who.threatMult;
     who.statDealt += damageDealt;
+    this.noteSalience(who, damageDealt);
   }
 
   /** The hate system: single-target hits land on the highest-threat hero. */
@@ -2410,6 +2924,7 @@ export class BossFight {
   private bossStrike(hitDamage: number, targets: "threat" | "all"): void {
     // Visual first — the swing/blast animation is the hit's telegraph.
     this.hooks.bossStrike(targets);
+    this.modelBossBlow(targets);
     // Extinction's dome cuts the boss's OUTGOING before any player-side
     // mitigation — separate terms, which is why 0.6 can coexist with the cap.
     const dome = this.simT < this.domeUntil ? 1 - this.domeCut : 1;
@@ -2420,8 +2935,37 @@ export class BossFight {
       }
       return;
     }
+    // Bobo Doll: the single-target blow lands on the doll, and the doll keeps count.
+    if (this.simT < this.decoyUntil) {
+      this.decoyAbsorbed += dmg;
+      this.hooks.defenseProc?.("Bobo Doll", this.decoyOwnerId ?? undefined);
+      return;
+    }
     const target = this.topThreatTarget();
     if (target) this.hitCombatant(target, dmg);
+  }
+
+  /**
+   * A Bandura with nobody to watch models the boss: each blow it lands is a
+   * strike he retains (the Bobo doll study — aggression watched is aggression
+   * learned). Always "motivated": the boss got what it wanted.
+   */
+  private modelBossBlow(targets: "threat" | "all"): void {
+    for (const b of this.actors) {
+      const ms = b.hero?.modeling;
+      if (!ms || !b.alive || this.modelOf(b) !== null) continue;
+      this.retain(b, ms, {
+        view: {
+          id: targets === "all" ? "boss.terror" : "boss.strike",
+          name: targets === "all" ? `${this.script.displayName}'s Terror` : `${this.script.displayName}'s Blow`,
+          heroId: "boss",
+          motivated: true,
+        },
+        effects: [],
+        heals: false,
+        until: this.simT + ms.retentionMs / 1000,
+      });
+    }
   }
 
   private hitCombatant(c: FightActor, incoming: number): void {
@@ -2464,6 +3008,27 @@ export class BossFight {
       this.hooks.announce(`Sublimation turns the blow into Focus (+${Math.round(dmg)})!`);
       return;
     }
+    // Shields (Hypothetical, Accommodation) soak the mitigated hit first,
+    // soonest-expiring first, before any of it reaches the stagger or HP.
+    if (c.shields.length) {
+      let rest = dmg;
+      c.shields.sort((x, y) => x.until - y.until);
+      for (const sh of c.shields) {
+        if (rest <= 0) break;
+        const take = Math.min(sh.left, rest);
+        sh.left -= take;
+        rest -= take;
+      }
+      c.shields = c.shields.filter((sh) => sh.left > 1e-6);
+      if (rest < dmg) this.hooks.defenseProc?.(`Shield −${Math.round(dmg - rest)}`, c.id);
+      if (rest <= 1e-6) return;
+      return this.hitAfterShield(c, rest);
+    }
+    this.hitAfterShield(c, dmg);
+  }
+
+  /** The tail of `hitCombatant`, after any shield took its share. */
+  private hitAfterShield(c: FightActor, dmg: number): void {
     // Masked Distress (Avoidant): the mitigated hit is deferred, not dropped —
     // it bleeds out over the spread, so the total taken is unchanged.
     if (this.simT < c.staggerUntil && c.staggerSpreadS > 0) {
@@ -2480,7 +3045,10 @@ export class BossFight {
    */
   private loseHp(c: FightActor, dmg: number, reaction: boolean): void {
     const before = c.hp;
-    c.hp = Math.max(0, c.hp - dmg);
+    // Object Permanence: still there — the floor is 1 HP while it holds.
+    const floor = this.simT < c.undyingUntil ? Math.min(1, before) : 0;
+    c.hp = Math.max(floor, c.hp - dmg);
+    if (floor > 0 && c.hp === floor && before - dmg < floor) this.hooks.defenseProc?.("Object Permanence", c.id);
     const lost = before - c.hp;
     c.statTaken += lost;
     if (lost > 0) c.lastHitAt = this.simT;
@@ -2540,7 +3108,10 @@ export class BossFight {
     // Credited to whoever PAID for it, not to the patient — a healer's share of
     // the attempt is the healing they put out, wherever it landed. Overheal is
     // excluded on purpose: it already pays the team as Amp, below.
-    if (src) src.statHealed += healed;
+    if (src) {
+      src.statHealed += healed;
+      this.noteSalience(src, healed);
+    }
     if (amount > 0) this.hooks.combatantHealed?.(c.name, healed, amount, c.isPlayer, label, c.id);
     if (c.input) {
       this.statHealing += healed;

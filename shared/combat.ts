@@ -28,8 +28,9 @@ export const COMBAT = {
    *
    * `damage taken = incoming × (1 − Mitigation)`. Sources are SKILLS ONLY:
    * gear contributes 0 so the 12% Rule stays damage-side. Additive, then
-   * clamped here. Piaget alone stacks 0.35 (0.10 palette rider + 0.25 E), so
-   * the 5 points of headroom are deliberate — two tanks must not trivially cap.
+   * clamped here. Pavlov alone stacks 0.35, so the 5 points of headroom are
+   * deliberate — two tanks must not trivially cap. (The note used to cite
+   * Piaget's 0.35, from when he was a tank; he is a healer since 2026-10-24.)
    */
   maxMitigation: 0.4,
   /** Critical hits: chance per player hit, and the damage multiplier. */
@@ -113,9 +114,9 @@ export function applyMitigation(incoming: number, mitigation: number): number {
  * not that one) a real play instead of an impossibility.
  *
  * The migration cost is real and deliberate: a tank with no stance authored
- * yet banks 1× like everyone else. Piaget and Ainsworth need theirs
- * (*Centration* and *Proximity Maintenance* — doc 07 #s-9); until then the
- * fight sim's AI allies hold their stance open from the first swing
+ * yet banks 1× like everyone else. Ainsworth's *Proximity Maintenance*
+ * shipped; Piaget no longer needs one (healer since 2026-10-24). The fight
+ * sim's AI allies hold their stance open from the first swing
  * (`SimAllySpec.threatStance`), so nothing regresses in a live fight.
  */
 export const THREAT = {

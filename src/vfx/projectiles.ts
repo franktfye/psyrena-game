@@ -13,6 +13,7 @@ import "@babylonjs/core/Meshes/Builders/torusBuilder";
 import "@babylonjs/core/Meshes/Builders/cylinderBuilder";
 
 import { createSoftRingTexture } from "./softSprites";
+import type { ProjectileDressingKind } from "./projectileDressings";
 
 /**
  * Cast projectiles — the travel layer between a cast and its target.
@@ -71,18 +72,33 @@ export interface ProjectileSpec {
    *  - Erikson's set, the life cycle in four props:
    *    "hourglass" the add-on basic — a small cyan glass hourglass (his
    *                charm), tumbling end over end;
-   *    "lifering"  key 1, Life Stage — an amber core with one ring orbiting
-   *                it, a single stage of a life on its axis;
+   *    "lifering"  key 1, Life Stage — an amber clock face, one stage on its axis;
    *    "gem"       key 2, Virtue — a spinning gold bipyramid, the virtue the
    *                stage yields;
    *    "spiral"    F, Life Review — three nested rings (amber, gold, cyan)
    *                spinning on three axes around a white-gold core, a whole
    *                life cycle turning at once.
+   *  - "schema" / "balance": Piaget's geometric seed and formal balance.
+   *  - "echo" / "reproduction": Bandura's mirrored model and copied forms.
+   *  - "thread" / "heart" / "locket": Ainsworth's sensitivity and security.
    */
   dressing?: DressingKind;
 }
 
-export type DressingKind = "steak" | "bell" | "smoke" | "hourglass" | "lifering" | "gem" | "spiral" | "heart" | "locket";
+export type DressingKind =
+  | "steak"
+  | "bell"
+  | "smoke"
+  | "hourglass"
+  | "lifering"
+  | "gem"
+  | "spiral"
+  | "heart"
+  | "locket"
+  | ProjectileDressingKind;
+
+const isLazyDressing = (kind: DressingKind | undefined): kind is ProjectileDressingKind =>
+  kind === "schema" || kind === "balance" || kind === "echo" || kind === "reproduction" || kind === "thread";
 
 export interface CastProjectiles {
   fire(spec: ProjectileSpec): void;
@@ -314,10 +330,24 @@ export function createCastProjectiles(scene: Scene, hero: TransformNode): CastPr
     return finishRig(p, root, spin, [ring, wisp], [puffMat, wispMat]);
   };
 
-  // ---- Erikson's props (cylinders, spheres and tori only: no new builders
-  // in the boot bundle) -------------------------------------------------------
+  // ---- Erikson's temporal props --------------------------------------------
   const cone = (name: string, top: number, bottom: number, height: number, tess: number): Mesh =>
     MeshBuilder.CreateCylinder(name, { height, diameterTop: top, diameterBottom: bottom, tessellation: tess }, scene);
+  const block = (
+    name: string,
+    options: { size?: number; width?: number; height?: number; depth?: number },
+    host: Scene
+  ): Mesh => {
+    const side = options.size ?? 1;
+    const mesh = MeshBuilder.CreateCylinder(
+      name,
+      { height: options.height ?? side, diameterTop: Math.SQRT2, diameterBottom: Math.SQRT2, tessellation: 4 },
+      host
+    );
+    mesh.scaling.set(options.width ?? side, 1, options.depth ?? side);
+    mesh.rotation.y = Math.PI / 4;
+    return mesh;
+  };
 
   // The hourglass: two glass cones tip to tip between two caps, a grain of
   // gold sand at the waist. His hourglass charm, thrown.
@@ -344,10 +374,22 @@ export function createCastProjectiles(scene: Scene, hero: TransformNode): CastPr
     const sand = MeshBuilder.CreateSphere(`eriksonProj_hgSandM_${i}`, { diameter: 0.16, segments: 6 }, scene);
     sand.position.y = -0.38;
     sand.material = sandMat;
-    return finishRig(p, root, spin, [upper, lower, capT, capB, sand], [glassMat, capMat, sandMat]);
+    const rails = [-1, 1].flatMap((sx) =>
+      [-1, 1].map((sz) => {
+        const rail = block(
+          `eriksonProj_hgRailM_${i}_${sx}_${sz}`,
+          { width: 0.035, height: 1.0, depth: 0.035 },
+          scene
+        );
+        rail.position.set(sx * 0.25, 0, sz * 0.25);
+        rail.material = capMat;
+        return rail;
+      })
+    );
+    return finishRig(p, root, spin, [upper, lower, capT, capB, sand, ...rails], [glassMat, capMat, sandMat]);
   };
 
-  // Life Stage: an amber core and one orbiting ring.
+  // Life Stage: a clock face with an angular centre, one hand and four ticks.
   const buildLifeRing = (p: Pooled, i: number): DressingRig => {
     const root = new TransformNode(`eriksonProj_lrRoot_${i}`, scene);
     const spin = new TransformNode(`eriksonProj_lrSpin_${i}`, scene);
@@ -355,11 +397,24 @@ export function createCastProjectiles(scene: Scene, hero: TransformNode): CastPr
     root.rotation.z = 0.5; // a tilted orbit reads at every camera angle
     const coreMat = dressMat(`eriksonProj_lrCore_${i}`, new Color3(1.0, 0.6, 0.3));
     const ringMat = dressMat(`eriksonProj_lrRing_${i}`, new Color3(1.0, 0.75, 0.45));
-    const core = MeshBuilder.CreateSphere(`eriksonProj_lrCoreM_${i}`, { diameter: 0.42, segments: 10 }, scene);
+    const core = block(`eriksonProj_lrCoreM_${i}`, { size: 0.24 }, scene);
+    core.rotation.z = Math.PI / 4;
     core.material = coreMat;
-    const ring = MeshBuilder.CreateTorus(`eriksonProj_lrRingM_${i}`, { diameter: 1.0, thickness: 0.07, tessellation: 28 }, scene);
+    const hand = block(`eriksonProj_lrHandM_${i}`, { width: 0.04, height: 0.38, depth: 0.04 }, scene);
+    hand.position.y = 0.15;
+    hand.rotation.z = -0.45;
+    hand.material = coreMat;
+    const ring = MeshBuilder.CreateTorus(`eriksonProj_lrRingM_${i}`, { diameter: 1.0, thickness: 0.055, tessellation: 28 }, scene);
     ring.material = ringMat;
-    return finishRig(p, root, spin, [core, ring], [coreMat, ringMat]);
+    const ticks = [0, 1, 2, 3].map((k) => {
+      const angle = k * Math.PI / 2;
+      const tick = block(`eriksonProj_lrTickM_${i}_${k}`, { width: 0.045, height: 0.14, depth: 0.045 }, scene);
+      tick.position.set(Math.sin(angle) * 0.5, Math.cos(angle) * 0.5, 0);
+      tick.rotation.z = -angle;
+      tick.material = ringMat;
+      return tick;
+    });
+    return finishRig(p, root, spin, [core, hand, ring, ...ticks], [coreMat, ringMat]);
   };
 
   // Virtue: a gold bipyramid gem.
@@ -393,7 +448,8 @@ export function createCastProjectiles(scene: Scene, hero: TransformNode): CastPr
       dressMat(`eriksonProj_spB_${i}`, new Color3(1.0, 0.82, 0.35)),
       dressMat(`eriksonProj_spC_${i}`, new Color3(0.4, 0.9, 0.95)),
     ];
-    const core = MeshBuilder.CreateSphere(`eriksonProj_spCoreM_${i}`, { diameter: 0.4, segments: 10 }, scene);
+    const core = block(`eriksonProj_spCoreM_${i}`, { size: 0.3 }, scene);
+    core.rotation.set(Math.PI / 4, Math.PI / 4, 0);
     core.material = coreMat;
     const rings = [1.3, 1.0, 0.72].map((d, k) => {
       const r = MeshBuilder.CreateTorus(`eriksonProj_spRingM_${i}_${k}`, { diameter: d, thickness: 0.06, tessellation: 32 }, scene);
@@ -406,7 +462,6 @@ export function createCastProjectiles(scene: Scene, hero: TransformNode): CastPr
 
   // Ainsworth's heart-in-shield (her brooch; gold for the Earned Security
   // locket): two spheres and a cone make the heart, a thin disc the shield.
-  // Same primitives as above, so nothing new enters the boot bundle.
   const buildHeart = (gold: boolean) => (p: Pooled, i: number): DressingRig => {
     const tag = gold ? "lk" : "ht";
     const root = new TransformNode(`ainsworthProj_${tag}Root_${i}`, scene);
@@ -432,7 +487,7 @@ export function createCastProjectiles(scene: Scene, hero: TransformNode): CastPr
     return finishRig(p, root, spin, [...lobes, tip, shield], [heartMat, shieldMat]);
   };
 
-  const RIG_BUILDERS: Record<DressingKind, (p: Pooled, i: number) => DressingRig> = {
+  const RIG_BUILDERS: Partial<Record<DressingKind, (p: Pooled, i: number) => DressingRig>> = {
     heart: buildHeart(false),
     locket: buildHeart(true),
     steak: buildSteak,
@@ -443,6 +498,23 @@ export function createCastProjectiles(scene: Scene, hero: TransformNode): CastPr
     gem: buildGem,
     spiral: buildSpiral,
   };
+
+  const pendingDressingCasts: ProjectileSpec[] = [];
+  let lazyDressingFailed = false;
+  import("./projectileDressings")
+    .then((m) => {
+      const builders = m.createProjectileDressingBuilders(scene);
+      for (const kind of Object.keys(builders) as ProjectileDressingKind[]) {
+        const build = builders[kind];
+        RIG_BUILDERS[kind] = (p, i) => build(p.orb, i);
+      }
+      for (const spec of pendingDressingCasts.splice(0)) fire(spec);
+    })
+    .catch((err: unknown) => {
+      lazyDressingFailed = true;
+      console.warn("[vfx] projectile dressings failed to load:", err);
+      for (const spec of pendingDressingCasts.splice(0)) fire({ ...spec, dressing: undefined });
+    });
 
   // Impact flashes: billboarded soft rings that swell and fade on the boss.
   const impacts: PooledImpact[] = [];
@@ -552,6 +624,29 @@ export function createCastProjectiles(scene: Scene, hero: TransformNode): CastPr
           rig.spin.rotation.y += dt * 4.3;
           rig.spin.rotation.z += dt * 1.7;
           rig.spin.scaling.setAll(1.5 * (1 + u * 0.6));
+        } else if (p.dressing === "schema") {
+          dressAim.copyFrom(p.dir);
+          rig.root.lookAt(dressAim);
+          rig.spin.rotation.y += dt * 4.2;
+          rig.spin.rotation.z += dt * 1.4;
+        } else if (p.dressing === "balance") {
+          rig.spin.rotation.y += dt * 1.8;
+          rig.spin.rotation.z = Math.sin(p.age * 5) * 0.16;
+          rig.spin.scaling.setAll(1.15 + u * 0.25);
+        } else if (p.dressing === "echo") {
+          dressAim.copyFrom(p.dir);
+          rig.root.lookAt(dressAim);
+          rig.spin.rotation.z += dt * 2.2;
+          rig.spin.scaling.set(1 + Math.sin(p.age * 10) * 0.1, 1, 1);
+        } else if (p.dressing === "reproduction") {
+          rig.spin.rotation.y += dt * 4.5;
+          rig.spin.rotation.z = Math.sin(p.age * 6) * 0.14;
+          rig.spin.scaling.setAll(1.05 + u * 0.3);
+        } else if (p.dressing === "thread") {
+          dressAim.copyFrom(p.dir);
+          rig.root.lookAt(dressAim);
+          rig.spin.rotation.z = Math.sin(p.age * 8) * 0.18;
+          rig.spin.scaling.setAll(1 + Math.max(0, Math.sin(p.age * 12.6)) ** 6 * 0.12);
         } else {
           // Smoke: ring plane square to the flight, swelling and thinning as
           // it drifts — the far end of a blown ring's life.
@@ -578,12 +673,18 @@ export function createCastProjectiles(scene: Scene, hero: TransformNode): CastPr
     }
   });
 
-  return {
-    fire(spec) {
+  function fire(spec: ProjectileSpec): void {
+      if (isLazyDressing(spec.dressing) && !RIG_BUILDERS[spec.dressing]) {
+        if (lazyDressingFailed) spec = { ...spec, dressing: undefined };
+        else {
+          pendingDressingCasts.push(spec);
+          return;
+        }
+      }
       const p = pool.find((q) => !q.active) ?? pool[0]!;
       p.dressing = spec.dressing ?? null;
       if (p.dressing && !p.rigs[p.dressing]) {
-        p.rigs[p.dressing] = RIG_BUILDERS[p.dressing](p, pool.indexOf(p));
+        p.rigs[p.dressing] = RIG_BUILDERS[p.dressing]!(p, pool.indexOf(p));
       }
       // A slot may have flown a different prop last cast — only the live
       // dressing's rig renders.
@@ -593,14 +694,24 @@ export function createCastProjectiles(scene: Scene, hero: TransformNode): CastPr
       // In dressed mode the orb still flies (and drags the trail) but stays
       // invisible — visibility is not inherited, so the prop renders.
       p.orb.visibility = p.dressing ? 0 : 1;
-      p.trailBase = p.dressing === "smoke" ? 0.22 : 0.55;
+      p.trailBase = p.dressing === "smoke" ? 0.14 : p.dressing ? 0.3 : 0.48;
       const rig = p.dressing ? p.rigs[p.dressing] : undefined;
       if (rig) {
         for (const m of rig.mats) m.alpha = p.dressing === "smoke" ? 0.75 : 1;
+        if (p.dressing === "schema") {
+          rig.mats[0]!.emissiveColor = spec.color.scale(0.85);
+          rig.mats[1]!.emissiveColor = spec.color.scale(0.5);
+        } else if (p.dressing === "heart") {
+          rig.mats[0]!.emissiveColor = spec.color.scale(0.85);
+          rig.mats[1]!.emissiveColor = spec.color.scale(0.42);
+        }
         if (p.dressing === "steak") rig.spin.rotation.x = Math.random() * Math.PI * 2;
         if (p.dressing === "bell") rig.spin.rotation.y = Math.random() * Math.PI * 2;
         if (p.dressing === "smoke") rig.spin.scaling.setAll(3.0);
         if (p.dressing === "spiral") rig.spin.scaling.setAll(1.5);
+        if (p.dressing === "balance") rig.spin.scaling.setAll(1.15);
+        if (p.dressing === "echo" || p.dressing === "thread") rig.spin.scaling.setAll(1);
+        if (p.dressing === "reproduction") rig.spin.scaling.setAll(1.05);
       }
       // Same launch convention as the ult eye in freudCasts: the Tripo model
       // looks down the wrapper's -Z, so visible "forward" is Backward().
@@ -639,8 +750,8 @@ export function createCastProjectiles(scene: Scene, hero: TransformNode): CastPr
       p.mat.emissiveColor = spec.color.clone();
       p.mat.alpha = 1;
       p.trailMat.emissiveColor = spec.color.clone();
-      p.trailMat.alpha = 0.55;
-      p.trail.diameter = spec.size * 0.7;
+      p.trailMat.alpha = p.trailBase;
+      p.trail.diameter = spec.size * (p.dressing ? 0.28 : 0.5);
 
       p.orb.setEnabled(true);
       p.trail.setEnabled(true);
@@ -648,6 +759,7 @@ export function createCastProjectiles(scene: Scene, hero: TransformNode): CastPr
       p.trail.reset();
       p.trail.start();
       p.active = true;
-    },
-  };
+  }
+
+  return { fire };
 }

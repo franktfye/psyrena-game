@@ -56,7 +56,9 @@ import {
   BossFight,
   type FightHooks,
   type FightSnapshot,
+  type ModelingHudState,
   type PsychosocialHudState,
+  type RetainedView,
 } from "@shared/fight/bossFight";
 import { psychosocialFaces } from "../ui/psychosocialFaces";
 import { stageBannerFor } from "../ui/stageBanner";
@@ -375,6 +377,8 @@ export async function setupArenaCombat(
   let onPsychosocial: ((s: PsychosocialHudState) => void) | null = null;
   /** Erikson's rotation as last reported — keys the stage-specific VO lines. */
   let lastPsycho: PsychosocialHudState | null = null;
+  // …and for Bandura's retention slots (keys 1-4 wear the copied skills).
+  let onModeling: ((s: ModelingHudState) => void) | null = null;
 
   // Gear set bonus + equipped-pet stats, resolved once at fight start — same
   // read-once contract as the potions. The pet Focus stat is client-side
@@ -431,6 +435,7 @@ export async function setupArenaCombat(
     conditioningChanged: (s) => onConditioning?.(s),
     operantChanged: (s) => onOperant?.(s),
     psychosocialChanged: (s) => onPsychosocial?.(s),
+    modelingChanged: (s) => onModeling?.(s),
     announce: announceWorld,
     setBossPhase: (p) => {
       // The two audible entrances: idle→p1 is the pull the countdown was
@@ -744,10 +749,13 @@ export async function setupArenaCombat(
       // Repainted from the rotation on mount — see onPsychosocial below.
       erikson: "Significant\nRelations",
       ainsworth: "Sensitivity",
+      piaget: "Assimilation",
+      bandura: "Modeled\nAggression",
     };
     /** The plain shared effect kinds (bossFight applySharedEffects), in words. */
     const sec = (e: { durationMs?: number }): number => (e.durationMs ?? 0) / 1000;
     const sharedBit = (e: { kind: string; magnitude?: number; durationMs?: number; target?: string }): string | null => {
+      if (!e) return null;
       const pct = Math.round((e.magnitude ?? 0) * 100);
       switch (e.kind) {
         case "mitigation.grant":
@@ -766,11 +774,46 @@ export async function setupArenaCombat(
           return `healing on you is cut ${pct} percent for ${sec(e)} sec`;
         case "team.immunity":
           return `every other teammate is immune to the boss for ${sec(e)} sec (not you)`;
+        case "vulnerability":
+          return `the boss takes ${pct} percent more damage for ${sec(e)} sec`;
+        case "heal.hot":
+          return `heals the most wounded teammate ${e.magnitude} over ${sec(e)} sec`;
+        case "heal.single":
+          return `heals the most wounded teammate ${e.magnitude}, and nobody else`;
+        case "conservation":
+          return `shares the team's health out evenly (the same total, a new shape), then heals the team ${e.magnitude}`;
+        case "shield.team":
+          return `shields the team for ${e.magnitude} in total, absorbing damage for ${sec(e)} sec; what is left becomes team Amp`;
+        case "ally.undying":
+          return `the most wounded teammate cannot drop below 1 health for ${sec(e)} sec, then is healed ${e.magnitude}`;
+        case "decoy":
+          return `the boss's single-target blows hit the doll for ${sec(e)} sec, and it rebounds ${pct} percent of them`;
         default:
           return null;
       }
     };
+    /** "age.toddler" → "a toddler": the forms in the P2 announcements' words. */
+    const FORM_WORDS: Record<string, string> = {
+      "age.infant": "an infant",
+      "age.toddler": "a toddler",
+      "age.child": "a child",
+      "age.school": "a schoolchild",
+      "age.adolescent": "an adolescent",
+    };
     const paletteTooltip = (p: PaletteEntry): string => {
+      // Several forms per button (Piaget's stages): the heal in words, then
+      // which Shapeshift forms the stage answers.
+      if (p.answersTags) {
+        const what = p.effects.map(sharedBit).filter(Boolean);
+        const forms = p.answersTags.map((t) => FORM_WORDS[t] ?? t).join(" or ");
+        const head = p.base > 0 ? [`Deals ${p.base} damage`, ...what] : what;
+        return `${p.name}. ${[...head, `places a ${p.markType.charAt(0).toUpperCase()}${p.markType.slice(1)} Mark`].join("; ")}. While the boss shapeshifts: the correct answer when it takes the form of ${forms}.`;
+      }
+      // Bandura's retention slots: what the slot holds is the model's.
+      if (p.effects.some((e) => e.kind === "modeling.reproduce") && HERO.modeling) {
+        const m = HERO.modeling;
+        return `${p.name}. Holds a copy of a skill your model cast. Press to reproduce it: ${Math.round(p.base * m.motivatedMult)} if the model was rewarded for it (a crit or a right answer), ${Math.round(p.base * m.unmotivatedMult)} if not, with the original's effects. A copied heal heals instead. Empty, it rehearses for ${Math.round(p.base * m.emptyMult)}. Copies fade after ${m.retentionMs / 1000} sec.`;
+      }
       if (p.answersAxis) {
         // Human words, not the internal answer tag — STAGE_DETAIL mirrors the
         // P2 form announcements ("NIGHTMARE takes the form of an infant…").
@@ -835,14 +878,12 @@ export async function setupArenaCombat(
     };
     const chainTooltip = (): string => {
       const a = HERO.chain;
-      const bits = [`Deals ${a.base} damage${reachText(a)}`];
+      const bits = a.base > 0 ? [`Deals ${a.base} damage${reachText(a)}`] : [];
       for (const e of a.effects) {
         if (e.kind === "palette.auto-correct")
           bits.push("your next 3 stage casts cannot be wrong, though their Marks count at half value");
         else if (e.kind === "taunt") bits.push(`taunts the boss for ${(e.durationMs ?? 0) / 1000} sec`);
-        else if (e.kind === "threat.drop") bits.push(sharedBit(e)!);
-        else if (e.kind === "vulnerability")
-          bits.push(`the boss takes ${Math.round((e.magnitude ?? 0) * 100)} percent more damage for ${(e.durationMs ?? 0) / 1000} sec`);
+        else if (sharedBit(e)) bits.push(sharedBit(e)!);
       }
       return `${a.name}. ${bits.join("; ")}. ${overTimeText(a)}`.trim();
     };
@@ -856,10 +897,11 @@ export async function setupArenaCombat(
       if (HERO.psychosocial) {
         return `${u.name}. Deals ${u.base} damage plus ${u.perMark} for every virtue you have banked (up to ${u.maxMarksConsumed}), then spends them. The stages carry on where they were.`;
       }
-      const bits = [
-        `Deals ${u.base} damage plus ${u.perMark} for every Mark consumed, up to ${u.maxMarksConsumed} Marks`,
-      ];
-      if (u.heal) bits.push(`heals the team for ${u.heal}`);
+      const eq = u.effects.find((e) => e.kind === "equilibration.release");
+      const bits = eq
+        ? [`Heals the team ${u.heal ?? 0} plus ${eq.magnitude} for every Mark consumed, up to ${u.maxMarksConsumed} Marks`]
+        : [`Deals ${u.base} damage plus ${u.perMark} for every Mark consumed, up to ${u.maxMarksConsumed} Marks`];
+      if (u.heal && !eq) bits.push(`heals the team for ${u.heal}`);
       for (const e of u.effects) {
         if (e.kind === "zone.extinction")
           bits.push(
@@ -1115,7 +1157,7 @@ export async function setupArenaCombat(
         layout: touch ? "touch" : "bar",
         // The touch cluster's word for the wheel: Skinner's palette is his
         // four schedules, not "Stages".
-        paletteWord: HERO.reinforcement ? "Schedules" : undefined,
+        paletteWord: HERO.reinforcement ? "Schedules" : HERO.modeling ? "Copies" : undefined,
         // Erikson's 1 and 2 are a rhythm, not a menu — two direct buttons.
         paletteInline: HERO.psychosocial !== undefined,
         gcdMs: 1_500,
@@ -1186,6 +1228,43 @@ export async function setupArenaCombat(
       };
       const initial = driver.psychosocial;
       if (initial) onPsychosocial(initial);
+    }
+
+    // ---- Bandura's retention slots (keys 1-4 wear the copied skills) --------
+    // Each slot shows the COPY: its name and the original hero's own icon
+    // (a modeled boss blow wears his Modeled Aggression face), a star when
+    // the model was rewarded for it. The caption names the model; tapping it
+    // moves the pin (automatic → each teammate → automatic), which is the
+    // touch path a party-frame tap would otherwise need.
+    if (HERO.modeling) {
+      const slotIds = HERO.palette.map((p) => p.id);
+      const copyIcon = (v: RetainedView): string | undefined =>
+        v.heroId === "boss"
+          ? skillIcon("modeled_aggression")
+          : SKILL_ICON_HEROES.has(v.heroId)
+            ? `/assets/ui/skills/${v.heroId}/${slug(v.id)}.webp`
+            : skillIcon("reproduction");
+      onModeling = (st): void => {
+        st.slots.forEach((v, i) => {
+          const id = slotIds[i];
+          if (!id) return;
+          if (v) bar?.setLabel(id, wrapLabel(`${v.motivated ? "★ " : ""}${v.name}`), copyIcon(v));
+          else bar?.setLabel(id, "Empty", skillIcon(slug(id)));
+        });
+        const who = st.model ? st.model.name : "the boss";
+        bar?.setCaption(`Watching ${who}${st.pinned ? " (pinned)" : ""} · tap to change model\n★ = rewarded, full power`);
+        // The caption exists from its first paint on; wire the tap once. In a
+        // ranked fight that is the first server frame, not the bar's mount.
+        const captionEl = document.getElementById("action-caption");
+        if (captionEl && !captionEl.dataset.modelTap) {
+          captionEl.dataset.modelTap = "1";
+          captionEl.style.pointerEvents = "auto";
+          captionEl.style.cursor = "pointer";
+          captionEl.addEventListener("click", () => driver.cycleModel());
+        }
+      };
+      const initial = driver.modeling;
+      if (initial) onModeling(initial);
     }
 
     // ---- Skinner's quadrant toggles (E ⇄ contingency, R ⇄ consequence) -----

@@ -21,6 +21,8 @@ import { PAVLOV, PAVLOV_CONDITIONING } from "@shared/heroes/pavlov";
 import { SKINNER, SKINNER_REINFORCEMENT } from "@shared/heroes/skinner";
 import { ERIKSON, ERIKSON_PSYCHOSOCIAL } from "@shared/heroes/erikson";
 import { AINSWORTH } from "@shared/heroes/ainsworth";
+import { PIAGET, PIAGET_DEVELOPMENT } from "@shared/heroes/piaget";
+import { BANDURA, BANDURA_MODELING } from "@shared/heroes/bandura";
 import { COMBAT, BEAT_PERIOD_S } from "@shared/combat";
 import { overTimeText, reachText } from "./skillText";
 
@@ -609,6 +611,184 @@ export const AINSWORTH_SKILL_LORE: SkillLore[] = [
   },
 ];
 
+
+const PIA = PIAGET;
+const piaStage = (id: string) => PIA.palette.find((p) => p.id === id)!;
+const piaFx = (id: string) => piaStage(id).effects[0]!;
+const piaSec = (ms?: number): number => (ms ?? 0) / 1000;
+
+/**
+ * Piaget's buttons. Keys 1–4 are his four stages in order, each healing the
+ * way a child at that stage thinks; in order they refund Focus.
+ */
+export const PIAGET_SKILL_LORE: SkillLore[] = [
+  {
+    id: "piaget.assimilation",
+    name: "Assimilation",
+    key: "LMB",
+    summary: "Your basic attack: fitting the boss into a schema you already have.",
+    numbers: () => `Deals ${PIA.basic.base} damage. No Focus cost. ${piaSec(PIA.basic.cooldownMs)} sec cooldown.`,
+    howToUse: "Fill the gaps between heals with it. A healer with nothing to heal should still be hitting.",
+    theory:
+      "Assimilation is taking in something new through a schema you already have: a toddler who knows dogs calls every four-legged animal a dog.",
+  },
+  {
+    id: "piaget.sensorimotor",
+    name: "Sensorimotor",
+    key: "1",
+    summary: "Circular Reaction: a heal over time on whoever is lowest.",
+    numbers: () =>
+      `Heals the most wounded teammate ${piaFx("piaget.sensorimotor").magnitude} over ${piaSec(piaFx("piaget.sensorimotor").durationMs)} sec and places a Schema Mark. Recast it and a second heal runs alongside. Costs ${piaStage("piaget.sensorimotor").focusCost} Focus. Answers an infant.`,
+    howToUse: "Start every sequence with it: it is stage one, and the heal lands while you cast the rest.",
+    theory:
+      "Birth to about two. Infants learn through their senses and actions, and repeat what worked again and again (circular reactions). By the end of the stage they know an object still exists when it is hidden.",
+  },
+  {
+    id: "piaget.preoperational",
+    name: "Preoperational",
+    key: "2",
+    summary: "Centration: the whole heal on one teammate, nobody else.",
+    numbers: () =>
+      `Heals the most wounded teammate ${piaFx("piaget.preoperational").magnitude} at once and places a Schema Mark. Costs ${piaStage("piaget.preoperational").focusCost} Focus. Answers a toddler or a child.`,
+    howToUse: "Your emergency button. When one teammate is in trouble, put everything on them.",
+    theory:
+      "About two to seven. Children use symbols and pretend play, but think egocentrically and centre on one feature at a time, which is why the taller glass always seems to hold more.",
+  },
+  {
+    id: "piaget.concrete",
+    name: "Concrete Operational",
+    key: "3",
+    summary: "Conservation: the team's health shared out evenly, then a team heal.",
+    numbers: () =>
+      `Shares the team's health out evenly (everyone ends at the same fraction, the total unchanged), then heals the team ${piaFx("piaget.concrete").magnitude}, split across everyone. Places a Schema Mark. Costs ${piaStage("piaget.concrete").focusCost} Focus. Answers a schoolchild.`,
+    howToUse: "Press it when one teammate is low and the others are healthy: the healthy ones carry the hurt one.",
+    theory:
+      "About seven to eleven. Children reason logically about real things. They grasp conservation: an amount stays the same when it changes shape, poured into another glass or rolled out into a sausage.",
+  },
+  {
+    id: "piaget.formal",
+    name: "Formal Operational",
+    key: "4",
+    summary: "Hypothetical: a shield before the hit lands.",
+    numbers: () =>
+      `Shields the team for ${piaFx("piaget.formal").magnitude} in total, split across everyone, for ${piaSec(piaFx("piaget.formal").durationMs)} sec. Whatever is left when it fades becomes team Amp. Places a Schema Mark. Costs ${piaStage("piaget.formal").focusCost} Focus; after 1, 2 and 3 in order it refunds ${PIAGET_DEVELOPMENT.sequenceFocusRefund}. Answers an adolescent.`,
+    howToUse: "Cast it before the boss's big hits, not after. It finishes the sequence, so it also earns the Focus refund.",
+    theory:
+      "About eleven onward. Adolescents reason about the abstract and the hypothetical: what would happen if, and how to test it.",
+  },
+  {
+    id: "piaget.accommodation",
+    name: "Accommodation",
+    key: "E",
+    summary: "A team shield and less damage for everyone.",
+    numbers: () => {
+      const sh = PIA.defense.effects.find((e) => e.kind === "shield.team");
+      return `Shields the team for ${sh?.magnitude} in total for ${piaSec(sh?.durationMs)} sec, and everyone takes ${pct(PIA.defense.mitigation?.magnitude ?? 0)} less damage for ${piaSec(PIA.defense.mitigation?.durationMs)} sec. Costs ${PIA.defense.focusCost} Focus. ${piaSec(PIA.defense.cooldownMs)} sec cooldown.`;
+    },
+    howToUse: "Press it when the whole raid is about to be hit, in Terror above all.",
+    theory:
+      "Accommodation is changing a schema to fit something it cannot absorb: the toddler learns that a cow is not a dog after all. Assimilation and accommodation together are how, for Piaget, all knowledge is built.",
+  },
+  {
+    id: "piaget.object-permanence",
+    name: "Object Permanence",
+    key: "R",
+    summary: "The lowest teammate cannot die for a few seconds, then is healed.",
+    numbers: () => {
+      const e = PIA.chain.effects[0]!;
+      return `The most wounded teammate cannot drop below 1 health for ${piaSec(e.durationMs)} sec, then is healed ${e.magnitude}. Costs ${PIA.chain.focusCost} Focus. ${piaSec(PIA.chain.cooldownMs)} sec cooldown.`;
+    },
+    howToUse: "Save it for the moment someone is about to fall. It buys time for your other heals.",
+    theory:
+      "Knowing an object still exists when you cannot see it. Piaget hid a toy under a cloth: young infants stop looking, older ones search. Later studies found signs of it months earlier than he thought.",
+  },
+  {
+    id: "piaget.equilibration",
+    name: "Equilibration",
+    key: "F",
+    summary: "Spend the Schema Marks on a big team heal and a cleanse.",
+    numbers: () => {
+      const eq = PIA.ultimate.effects.find((e) => e.kind === "equilibration.release");
+      return `Heals the team ${PIA.ultimate.heal} plus ${eq?.magnitude} for every Mark consumed, up to ${PIA.ultimate.maxMarksConsumed}, and lifts Fixation off everyone. Overheal becomes team Amp. Costs ${PIA.ultimate.focusCost} Focus. ${piaSec(PIA.ultimate.cooldownMs)} sec cooldown.`;
+    },
+    howToUse: "Build Marks with your stages, then press it when the team is hurt, or full, for an Amp window.",
+    theory:
+      "Equilibration is the drive to balance assimilation and accommodation. When a schema fails, the mind is out of balance, and restoring it is what moves a child up to the next stage.",
+  },
+];
+
+const BAN = BANDURA;
+const banSec = (ms?: number): number => (ms ?? 0) / 1000;
+
+/** Bandura's buttons. Keys 1–4 hold copies of his model's skills. */
+export const BANDURA_SKILL_LORE: SkillLore[] = [
+  {
+    id: "bandura.modeled-aggression",
+    name: "Modeled Aggression",
+    key: "LMB",
+    summary: "Your basic attack: a punch you learned by watching.",
+    numbers: () => `Deals ${BAN.basic.base} damage. No Focus cost. ${banSec(BAN.basic.cooldownMs)} sec cooldown.`,
+    howToUse: "Fill the gaps while your model fills your slots.",
+    theory:
+      "In the Bobo doll studies, children who watched an adult hit an inflatable doll hit it too, often with the same words and moves, and more so when the adult had been rewarded.",
+  },
+  ...BAN.palette.map((p, i) => ({
+    id: p.id,
+    name: `Retention ${i + 1}`,
+    key: String(i + 1),
+    summary: "A copy of a skill your model cast. Press it to reproduce it.",
+    numbers: () => {
+      const m = BANDURA_MODELING;
+      return `Pays ${Math.round(p.base * m.motivatedMult)} if your model was rewarded for the original (a crit or a right answer), ${Math.round(p.base * m.unmotivatedMult)} if not, and carries the original's effects. A copied heal heals for that much instead. Empty, it rehearses for ${Math.round(p.base * m.emptyMult)}. Copies fade after ${m.retentionMs / 1000} sec, and a press spends the copy. Costs 8 Focus.`;
+    },
+    howToUse:
+      "Watch the caption: it names your model. Press starred copies first, they pay full. Tap the caption to pin a different teammate.",
+    theory:
+      i === 0
+        ? "Attention: we copy models who stand out, who are competent, successful or like us. Your model is the teammate doing the most right now."
+        : i === 1
+          ? "Retention: what we saw has to be remembered to be copied. Unrehearsed, it fades."
+          : i === 2
+            ? "Reproduction: turning the memory back into action. Copying is not perfect, so an ordinary copy pays less than the original."
+            : "Motivation: we copy what we saw rewarded. That is vicarious reinforcement, and it is why a starred copy pays full.",
+  })),
+  {
+    id: "bandura.self-efficacy",
+    name: "Self-Efficacy",
+    key: "E",
+    summary: "Heal yourself and take less damage.",
+    numbers: () =>
+      `Heals you ${BAN.defense.heal} and you take ${pct(BAN.defense.mitigation?.magnitude ?? 0)} less damage for ${banSec(BAN.defense.mitigation?.durationMs)} sec. Costs ${BAN.defense.focusCost} Focus. ${banSec(BAN.defense.cooldownMs)} sec cooldown.`,
+    howToUse: "Your one defensive button. Press it before a hit you can see coming.",
+    theory:
+      "Self-efficacy is your belief that you can do a thing, and it predicts whether you try, how hard, and for how long. It grows from your own successes, from watching others succeed, from encouragement, and from a calm body.",
+  },
+  {
+    id: "bandura.bobo-doll",
+    name: "Bobo Doll",
+    key: "R",
+    summary: "A decoy the boss cannot resist, which hits back.",
+    numbers: () => {
+      const e = BAN.chain.effects[0]!;
+      return `Deals ${BAN.chain.base} damage${reachText(BAN.chain)}. For ${banSec(e.durationMs)} sec the boss's single-target blows hit the doll instead of your tank, and it rebounds ${pct(e.magnitude ?? 0)} of them at the boss. Costs ${BAN.chain.focusCost} Focus. ${banSec(BAN.chain.cooldownMs)} sec cooldown.`;
+    },
+    howToUse: "Give your tank a breather in Onslaught, or save a teammate the boss is about to finish.",
+    theory:
+      "The inflatable clown from Bandura's 1961 to 1963 experiments with Dorothea and Sheila Ross. It is round-bottomed, so it always bounces back up to be hit again.",
+  },
+  {
+    id: "bandura.reciprocal-determinism",
+    name: "Reciprocal Determinism",
+    key: "F",
+    summary: "Cash in the Marks, and buff the person, the behaviour and the environment.",
+    numbers: () =>
+      `Deals ${BAN.ultimate.base} damage plus ${BAN.ultimate.perMark} for every Mark consumed, up to ${BAN.ultimate.maxMarksConsumed}. For 6 sec: you take 15 percent less damage, the team deals 6 percent more, and the boss takes 8 percent more. Costs ${BAN.ultimate.focusCost} Focus. ${banSec(BAN.ultimate.cooldownMs)} sec cooldown.`,
+    howToUse: "Press it with a full Mark board, at the start of a damage window.",
+    theory:
+      "Bandura's model of how a person, their behaviour and their environment all shape each other at once. None of the three is simply the cause of the others.",
+  },
+];
+
 /** Look up the lore for a bar slot id, whoever's kit it belongs to. Each
  *  palette stage gets its own entry; anything else with the stage prefix
  *  falls back to the shared one. */
@@ -626,6 +806,8 @@ export function loreFor(slotId: string): SkillLore | null {
     SKINNER_SKILL_LORE.find((s) => s.id === id) ??
     ERIKSON_SKILL_LORE.find((s) => s.id === id) ??
     AINSWORTH_SKILL_LORE.find((s) => s.id === id) ??
+    PIAGET_SKILL_LORE.find((s) => s.id === id) ??
+    BANDURA_SKILL_LORE.find((s) => s.id === id) ??
     SKILL_LORE.find((s) => id.startsWith(s.id)) ??
     null
   );
@@ -640,6 +822,8 @@ const HERO_SKILL_LORE: Record<string, SkillLore[]> = {
   skinner: SKINNER_SKILL_LORE,
   erikson: ERIKSON_SKILL_LORE,
   ainsworth: AINSWORTH_SKILL_LORE,
+  piaget: PIAGET_SKILL_LORE,
+  bandura: BANDURA_SKILL_LORE,
 };
 
 export function skillLoreFor(heroId: string): SkillLore[] {
@@ -778,6 +962,55 @@ export const AINSWORTH_CHARACTER = {
     "Attachment research is live, contemporary science. The Strange Situation and the sensitivity scales are still used, and the theory guides parenting and foster-care work. What is debated is how much the styles vary across cultures and how strongly they predict later life. Ainsworth is flagged Contemporary for that reason.",
 } as const;
 
+
+export const PIAGET_CHARACTER = {
+  codename: "The Constructor",
+  realName: "Jean William Fritz Piaget",
+  lifespan: "1896 to 1980",
+
+  /** The hero as Psyrena presents him. */
+  inGame: [
+    "Piaget enters Psyrena as The Constructor, a healer whose four number keys are his four stages of cognitive development. Each heals the way a child at that stage thinks: the infant repeats what worked, the preschooler fixes on one thing, the schoolchild knows an amount survives a change of shape, and the adolescent plans for what has not happened yet.",
+    "The stages come in an order that cannot be skipped, and the kit pays for knowing it: cast them 1, 2, 3, 4 and the last one refunds Focus. When the boss shapeshifts there is nothing to heal, so his stages answer its age instead, Preoperational covering both the toddler and the child.",
+    "He wears his beret, round gold spectacles and a charcoal three piece suit with emerald piping, a glowing spiral at his lapel and a charm of stacked building blocks at his hip. Knowledge, for Piaget, is built, one block at a time.",
+  ],
+
+  /** The historical figure, including what modern evidence says. */
+  historical: [
+    "Jean Piaget was a Swiss psychologist from Neuchâtel. He published his first scientific paper, on an albino sparrow, at about ten, and took a doctorate on molluscs. Scoring reasoning tests in Alfred Binet's laboratory in Paris, he noticed that children of the same age made the same wrong answers, and spent the rest of his life asking why.",
+    "He watched his own three children closely from birth, and built the theory of four stages, schemas, assimilation, accommodation and equilibration. He called his field genetic epistemology, the study of how knowledge develops, and founded a research centre for it in Geneva in 1955.",
+    "His core findings replicate: children do pass through these kinds of thinking in this order, and conservation and object permanence are real. Later research found that infants and young children are more capable, earlier, than his methods showed, that the stages are less sharply divided, and that schooling and culture matter more than he allowed.",
+  ],
+
+  /** Contested: the sequence holds, the ages and the clean stages do not. */
+  evidenceNote:
+    "Piaget's stage sequence and his core phenomena hold up and are still taught everywhere. The ages are earlier and the stages less discrete than he proposed, and culture and schooling play a bigger part. Piaget is flagged Contested throughout the game for that reason.",
+} as const;
+
+export const BANDURA_CHARACTER = {
+  codename: "The Mirror",
+  realName: "Albert Bandura",
+  lifespan: "1925 to 2021",
+
+  /** The hero as Psyrena presents him. */
+  inGame: [
+    "Bandura enters Psyrena as The Mirror, a flex hero who has no fixed skills of his own. His four number keys fill with copies of what his model casts, and the four steps of observational learning are the controls: attention picks the model, retention holds the copies, reproduction is the key press, and motivation decides the power, full when the model was rewarded.",
+    "Alone, he has nobody to watch but the boss, so he copies its blows. In a party he copies whoever is doing best, or whoever you pin, and a copied heal heals, a copied taunt taunts. His Bobo doll gives the tank a breather, and Reciprocal Determinism lifts the person, the behaviour and the environment at once.",
+    "He wears a slate grey suit with silver piping, rectangular glasses, and a tie of glowing cyan squares, with a mirror at his lapel and another at his hip.",
+  ],
+
+  /** The historical figure, including what modern evidence says. */
+  historical: [
+    "Albert Bandura was a Canadian-American psychologist, born in Mundare, Alberta, a town of about four hundred people whose high school had two teachers. At the University of British Columbia he took his first psychology course because it fitted his car-pool timetable. He did his doctorate at Iowa and spent his career at Stanford.",
+    "His Bobo doll experiments of the early 1960s showed that children learn behaviour by watching it, without being rewarded themselves. From them he built social learning theory, later social cognitive theory, with its idea of reciprocal determinism, and in 1977 introduced self-efficacy, one of the most studied ideas in psychology. He received the National Medal of Science in 2015.",
+    "Observational learning and self-efficacy are strongly supported and widely used, in education, health and therapy. The Bobo doll studies themselves have been criticised: the doll was made to be hit, and play aggression toward a toy may not say much about real violence.",
+  ],
+
+  /** Contemporary: the theory is live and applied. */
+  evidenceNote:
+    "Observational learning and self-efficacy are live, contemporary science, applied in classrooms, clinics and health programmes. What is debated is how far the Bobo doll studies speak to real aggression. Bandura is flagged Contemporary for that reason.",
+} as const;
+
 /** One shape for every card — the codex renders whoever is selected. */
 export interface HeroCharacter {
   codename: string;
@@ -794,4 +1027,6 @@ export const CHARACTERS: Record<string, HeroCharacter> = {
   skinner: SKINNER_CHARACTER,
   erikson: ERIKSON_CHARACTER,
   ainsworth: AINSWORTH_CHARACTER,
+  piaget: PIAGET_CHARACTER,
+  bandura: BANDURA_CHARACTER,
 };

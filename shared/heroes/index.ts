@@ -4,6 +4,8 @@ import { PAVLOV } from "./pavlov.ts";
 import { SKINNER } from "./skinner.ts";
 import { ERIKSON } from "./erikson.ts";
 import { AINSWORTH } from "./ainsworth.ts";
+import { PIAGET } from "./piaget.ts";
+import { BANDURA } from "./bandura.ts";
 
 /**
  * The playable roster — every hero whose kit is authored data, keyed by id.
@@ -21,6 +23,8 @@ export const HEROES: Record<string, Hero> = {
   skinner: SKINNER,
   erikson: ERIKSON,
   ainsworth: AINSWORTH,
+  piaget: PIAGET,
+  bandura: BANDURA,
 };
 
 /**

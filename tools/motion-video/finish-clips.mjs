@@ -30,7 +30,7 @@ const [hero, ...rest] = process.argv.slice(2);
 const opt = {};
 for (let i = 0; i < rest.length; i += 2) opt[rest[i].replace(/^--/, "")] = rest[i + 1];
 if (!hero || !opt.character || !opt.runs || !opt.out) {
-  console.error("usage: finish-clips.mjs <hero> --character character.glb --runs <dir> --out <dir> [--clips a,b]");
+  console.error("usage: finish-clips.mjs <hero> --character character.glb --runs <dir> --out <dir> [--clips a,b] [--foot-fix off]");
   process.exit(1);
 }
 const FPS = 30;
@@ -123,7 +123,7 @@ for (const side of ["Left", "Right"]) {
   const d = [T.p[0] - F.p[0], T.p[1] - F.p[1], T.p[2] - F.p[2]];
   const slope = (Math.atan2(-d[1], Math.hypot(d[0], d[2])) * 180) / Math.PI;
   const delta = slope - M2MR_FOOT_SLOPE;
-  if (delta <= 1) continue;
+  if (delta <= 1 || opt["foot-fix"] === "off") continue; // off: clips not from m2mr (pinoc-retarget.mjs)
   // Lateral axis: horizontal, perpendicular to the foot's heading (+X when it faces +Z).
   const h = Math.hypot(d[0], d[2]);
   const lat = rotV(qinv(F.q), [d[2] / h, 0, -d[0] / h]);   // into the foot's local frame

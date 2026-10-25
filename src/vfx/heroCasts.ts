@@ -31,6 +31,12 @@ export function createHeroSkillVfx(
   if (heroId === "ainsworth") {
     return lazySkillVfx(() => import("./ainsworthCasts").then((m) => m.createAinsworthSkillVfx(scene, hero)));
   }
+  if (heroId === "piaget") {
+    return lazySkillVfx(() => import("./piagetCasts").then((m) => m.createPiagetSkillVfx(scene, hero)));
+  }
+  if (heroId === "bandura") {
+    return lazySkillVfx(() => import("./banduraCasts").then((m) => m.createBanduraSkillVfx(scene, hero)));
+  }
   return createFreudSkillVfx(scene, hero);
 }
 
@@ -70,6 +76,8 @@ export function paletteTint(slotId: string): Color3 {
     SKINNER_TINTS[suffix] ??
     ERIKSON_TINTS[suffix] ??
     AINSWORTH_TINTS[suffix] ??
+    PIAGET_TINTS[suffix] ??
+    (slotId.startsWith("bandura.") ? BANDURA_COPY_TINT : undefined) ??
     STAGE_TINTS.oral!
   );
 }
@@ -92,19 +100,31 @@ const AINSWORTH_TINTS: Record<string, Color3> = {
   disorganized: new Color3(0.66, 0.42, 1.0), // violet
 };
 
+/** Piaget's four stages, the hues of his icons and cast effects. */
+const PIAGET_TINTS: Record<string, Color3> = {
+  sensorimotor: new Color3(1.0, 0.7, 0.25), // amber
+  preoperational: new Color3(1.0, 0.45, 0.5), // coral
+  concrete: new Color3(0.38, 0.75, 1.0), // sky
+  formal: new Color3(0.68, 0.45, 1.0), // violet
+};
+
+/** Bandura's reproductions fly the cyan of the squares on his tie. */
+const BANDURA_COPY_TINT = new Color3(0.3, 0.9, 1.0);
+
 /**
  * Basic-attack projectile style, shared by the hub bar and the arena bar so
  * the two cannot drift. Pavlov throws the little NS bell (spinning, like the
- * CS ring fan), Freud blows a cigar-smoke ring; everyone else keeps the
- * plain fast blue bolt.
+ * CS ring fan), Freud blows a cigar-smoke ring; the other named heroes fly
+ * their own procedural props and unknown heroes keep the plain fast blue bolt.
  */
 export function basicProjectileStyle(heroId: string): { color: Color3; dressing?: DressingKind } {
   if (heroId === "pavlov") return { color: new Color3(1.0, 0.84, 0.3), dressing: "bell" };
   if (heroId === "freud") return { color: new Color3(0.62, 0.64, 0.68), dressing: "smoke" };
   // Erikson's add-on carries the cyan of his hourglass charm.
   if (heroId === "erikson") return { color: new Color3(0.4, 0.92, 0.95), dressing: "hourglass" };
-  // Ainsworth's Sensitivity: a quick teal bolt, the colour of her cardigan.
-  if (heroId === "ainsworth") return { color: new Color3(0.16, 0.78, 0.8) };
+  if (heroId === "ainsworth") return { color: new Color3(0.16, 0.78, 0.8), dressing: "thread" };
+  if (heroId === "piaget") return { color: new Color3(0.28, 0.95, 0.58), dressing: "schema" };
+  if (heroId === "bandura") return { color: new Color3(0.7, 0.88, 0.96), dressing: "echo" };
   return { color: new Color3(0.45, 0.75, 1.0) };
 }
 
@@ -124,13 +144,18 @@ export function paletteDressing(slotId: string): { dressing?: DressingKind } {
   if (id === "erikson.virtue") return { dressing: "gem" };
   // Her four styles fly her heart-in-shield, tinted by style (paletteTint).
   if (id.startsWith("ainsworth.")) return { dressing: "heart" };
+  if (id.startsWith("piaget.")) return { dressing: "schema" };
+  if (id.startsWith("bandura.")) return { dressing: "reproduction" };
   return {};
 }
 
-/** The prop the ultimate flies, if any — Erikson's Life Review spiral. */
+/** The prop the ultimate flies, if any. */
 export function ultimateDressing(heroId: string): { dressing?: DressingKind } {
   if (heroId === "ainsworth") return { dressing: "locket" };
-  return heroId === "erikson" ? { dressing: "spiral" } : {};
+  if (heroId === "erikson") return { dressing: "spiral" };
+  if (heroId === "piaget") return { dressing: "balance" };
+  if (heroId === "bandura") return { dressing: "reproduction" };
+  return {};
 }
 
 export function ultimateTint(heroId: string): Color3 {
@@ -138,5 +163,7 @@ export function ultimateTint(heroId: string): Color3 {
   if (heroId === "skinner") return new Color3(1.0, 0.82, 0.45);
   if (heroId === "erikson") return new Color3(1.0, 0.86, 0.42); // the banked virtues' gold
   if (heroId === "ainsworth") return new Color3(1.0, 0.82, 0.34); // the mended heart's gold
+  if (heroId === "piaget") return new Color3(1.0, 0.84, 0.36); // the scales' gold
+  if (heroId === "bandura") return new Color3(1.0, 0.82, 0.32); // the triad's gold
   return new Color3(1.0, 0.35, 0.72);
 }

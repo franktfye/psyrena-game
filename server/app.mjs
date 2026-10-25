@@ -10,6 +10,7 @@
  * realtime combat authority — that stays with the Colyseus server planned in
  * docs/06. Keep gameplay-tuning data out of here.
  */
+import { serverLoad } from "./serverLoad.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { scrypt, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -55,8 +56,9 @@ const HERO_IDS = [
 // with no game_state row) counts as "any" and fills whatever slot is open —
 // entering the queue is never gated on role (docs 02: warn, don't block).
 const HERO_ROLES = {
-  pavlov: "tank", piaget: "tank", ainsworth: "tank",
-  skinner: "healer", maslow: "healer", seligman: "healer",
+  pavlov: "tank", ainsworth: "tank",
+  // Piaget became a healer on 2026-10-24 (shared/heroes/piaget.ts).
+  skinner: "healer", piaget: "healer", maslow: "healer", seligman: "healer",
   csikszentmihalyi: "healer", beck: "healer",
   freud: "dps", kohlberg: "dps", bandura: "dps",
   erikson: "dps", vygotsky: "dps", bronfenbrenner: "dps",
@@ -1276,6 +1278,12 @@ export async function handleApi(req, res) {
     if (route === "GET /api/health") {
       db.prepare("SELECT 1").get();
       return send(res, 200, { ok: true }), true;
+    }
+
+    // Ungated: the login screen's server-load pill. Sampled on a timer
+    // (serverLoad.mjs), so polling it costs a property read.
+    if (route === "GET /api/server/load") {
+      return send(res, 200, serverLoad()), true;
     }
 
     // Ungated: the login screen asks this to label the invitation-code box
